@@ -1,2 +1,2 @@
 # UROP
-Unsupervised cell type identification for spatial transcriptomics, extends spacexr
+Unsupervised cell type identification for spatial transcriptomics, extends spacexr.
