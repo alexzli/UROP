@@ -3,7 +3,7 @@ library(Matrix)
 library(doParallel)
 library(caret)
 
-source('../iter_optim.R')
+source('../optimization.R')
 source('../analysis.R')
 
 # Load data

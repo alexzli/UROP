@@ -7,11 +7,11 @@ pos <- puck@coords
 cd <- puck@counts
 counts <- cleanCounts(cd, min.lib.size = 100)
 corpus <- restrictCorpus(counts, removeAbove=1.0, removeBelow = 0.05)
-ldas <- fitLDA(t(as.matrix(corpus)), Ks = seq(8, 8, by = 1))
+ldas <- fitLDA(t(as.matrix(corpus)), Ks = c(20))
 optLDA <- optimalModel(models = ldas, opt = "min")
 results <- getBetaTheta(optLDA, perc.filt = 0.05, betaScale = 1000)
 deconProp <- results$theta
-saveRDS(deconProp,'../UROP/objects/deconProp_cerebellum_slideseq.rds')
+saveRDS(deconProp,'../UROP/objects/deconProp_cerebellum_slideseq_20res.rds')
 
 # function to generate cell assignment table with RCTD and deconvolve results
 compare_deconvolve <- function(RCTD, deconProp, verbose = FALSE, singlet_threshold = 0) {
@@ -34,12 +34,12 @@ compare_deconvolve <- function(RCTD, deconProp, verbose = FALSE, singlet_thresho
 }
 
 # load data
-deconProp <- readRDS('../UROP/objects/deconProp_cerebellum_slideseq.rds')
+deconProp <- readRDS('../UROP/objects/deconProp_cerebellum_slideseq_23res.rds')
 RCTDtruth <- readRDS('../UROP/objects/RCTD_cerebellum_slideseq.rds')
-RCTDlist <- readRDS('../UROP/objects/RCTD_list_clustered.rds')
+RCTDlist <- readRDS('../UROP/objects/RCTD_list_clustered_23res.rds')
 RCTDpred <- RCTDlist[[length(RCTDlist)]]
 
-mytable <- compare_deconvolve(RCTDtruth, deconProp, verbose = TRUE, singlet_threshold = 0.45)
+mytable <- compare_deconvolve(RCTDtruth, deconProp, verbose = TRUE, singlet_threshold = 0.3)
 mytable
 cell.heatmap(mytable = mytable)
 cond.entropy(mytable = mytable)

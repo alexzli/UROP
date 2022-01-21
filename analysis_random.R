@@ -41,7 +41,7 @@ for (i in 1:length(RCTDlist)) {
 
 # Cell type assignments compare to ground truth (table)
 for (i in 1:length(RCTDlist)) {
-  print(cell.assignment.table(RCTDtruth, RCTDlist[[i]]))
+  print(cell.assignment.table(RCTDtruth, RCTDlist[[i]], verbose = TRUE))
 }
 
 # Gene expression MSE compare to initial (testing deviation from initialization point)
