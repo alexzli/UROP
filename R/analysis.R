@@ -126,18 +126,14 @@ class.accuracy <- function(RCTD_truth, RCTD_pred, mytable = NULL, verbose = FALS
 #' @param RCTD_ref an RCTD object with reference gene expression stored in cell_type_info.
 #' @param RCTD_pred an RCTD object with predicted gene expression stored in cell_type_info.
 #' @param gene_list (default NULL) a vector of genes to be used when computing gene expression profiles. If null, selects all genes shared between the two RCTD objects.
-#' @param norm_ref (default FALSE) whether or not to normalize reference cell profiles with respect to the original puck.
 #' @return a list of the reference gene expression profile and predicted gene expression profile.
 #' @export
-gene.expression <- function(RCTD_ref, RCTD_pred, gene_list = NULL, norm_ref = FALSE) {
+gene.expression <- function(RCTD_ref, RCTD_pred, gene_list = NULL) {
 	pred_expression <- RCTD_pred@cell_type_info$renorm[[1]]
 	ref_expression <- RCTD_ref@cell_type_info$renorm[[1]]
 	if (is.null(gene_list))
 		gene_list <- intersect(rownames(na.omit(ref_expression)), rownames(na.omit(pred_expression)))
-	if (norm_ref)
-		ref_expression <- get_norm_ref(RCTD_ref@originalSpatialRNA, ref_expression, gene_list, RCTD_ref@internal_vars$proportions)
-	else
-		ref_expression <- data.matrix(ref_expression[gene_list,])
+	ref_expression <- data.matrix(ref_expression[gene_list,])
 	pred_expression <- data.matrix(pred_expression[gene_list,])
 	return(list(reference = ref_expression, prediction = pred_expression))
 }
@@ -147,16 +143,15 @@ gene.expression <- function(RCTD_ref, RCTD_pred, gene_list = NULL, norm_ref = FA
 #' @param RCTD_ref an RCTD object with reference gene expression stored in cell_type_info.
 #' @param RCTD_pred an RCTD object with predicted gene expression stored in cell_type_info.
 #' @param gene_list (default NULL) a vector of genes to be used when computing gene expression profiles. If null, selects all genes shared between the two RCTD objects.
-#' @param norm_ref (default FALSE) whether or not to normalize reference cell profiles with respect to the original puck.
-#' @param same_cells (default FALSE) whether or not the two RCTD objects contain the same cell types. If true, cell types are renamed to distinguish reference and predicted.
+#' @param relabel (default FALSE) whether or not to rename cell types to distinguish between reference and predicted.
 #' @return a matrix of the correlation between gene expression profiles between cell types.
 #' @export
-gene.correlation.mat <- function(RCTD_ref, RCTD_pred, gene_list = NULL, norm_ref = FALSE, same_cells = FALSE) {
-	gene_expression <- gene.expression(RCTD_ref, RCTD_pred, gene_list = gene_list, norm_ref = norm_ref)
+gene.correlation.mat <- function(RCTD_ref, RCTD_pred, gene_list = NULL, relabel = FALSE) {
+	gene_expression <- gene.expression(RCTD_ref, RCTD_pred, gene_list = gene_list)
 	ref_expression <- log(gene_expression$reference); pred_expression <- log(gene_expression$prediction)
 	ref_cells <- colnames(ref_expression); pred_cells <- colnames(pred_expression)
 	n_ref_cells <- length(ref_cells); n_pred_cells <- length(pred_cells)
-	if (same_cells) {
+	if (relabel) {
 		colnames(ref_expression) <- lapply(ref_cells, function(x) paste0(x, '_ref'))
 		colnames(pred_expression) <- lapply(pred_cells, function(x) paste0(x, '_pred'))
 	}
@@ -169,12 +164,13 @@ gene.correlation.mat <- function(RCTD_ref, RCTD_pred, gene_list = NULL, norm_ref
 #'
 #' @param RCTD_ref an RCTD object with reference gene expression stored in cell_type_info.
 #' @param RCTD_pred an RCTD object with predicted gene expression stored in cell_type_info.
+#' @param correlation (default NULL) option to pass in correlation matrix directly
 #' @param gene_list (default NULL) a vector of genes to be used when computing gene expression profiles. If null, selects all genes shared between the two RCTD objects.
-#' @param norm_ref (default FALSE) whether or not to normalize reference cell profiles with respect to the original puck.
 #' @return a heatmap plot of the correlation between gene expression profiles between cell types.
 #' @export
-gene.heatmap <- function(RCTD_ref, RCTD_pred, gene_list = NULL, norm_ref = FALSE) {
-	correlation <- gene.correlation.mat(RCTD_ref, RCTD_pred, gene_list = gene_list, norm_ref = norm_ref)
+gene.heatmap <- function(RCTD_ref, RCTD_pred, correlation = NULL, gene_list = NULL) {
+	if (is.null(correlation))
+		correlation <- gene.correlation.mat(RCTD_ref, RCTD_pred, gene_list = gene_list)
 	data <- melt(correlation ^ 2)
 	plot <- ggplot(data, aes(factor(Var1), factor(Var2), fill= value)) +
 							   geom_tile() +
@@ -190,19 +186,15 @@ gene.heatmap <- function(RCTD_ref, RCTD_pred, gene_list = NULL, norm_ref = FALSE
 #' @param RCTD_ref an RCTD object with reference gene expression stored in cell_type_info.
 #' @param RCTD_pred an RCTD object with predicted gene expression stored in cell_type_info.
 #' @param gene_list (default NULL) a vector of genes to be used when computing gene expression profiles. If null, selects all genes shared between the two RCTD objects.
-#' @param norm_ref (default FALSE) whether or not to normalize reference cell profiles with respect to the original puck.
 #' @return a value corresponding to the mean squared error between log gene expression profiles.
 #' @export
-gene.mse <- function(RCTD_ref, RCTD_pred, gene_list = NULL, norm_ref = FALSE) {
+gene.mse <- function(RCTD_ref, RCTD_pred, gene_list = NULL) {
 	pred_expression <- data.matrix(log(RCTD_pred@cell_type_info$renorm[[1]]))
 	ref_expression <- data.matrix(log(RCTD_ref@cell_type_info$renorm[[1]]))
 	common_cells <- intersect(colnames(ref_expression), colnames(pred_expression))
 	if (is.null(gene_list))
 		gene_list <- intersect(rownames(na.omit(ref_expression[rowSums(is.infinite(ref_expression)) == 0,])), rownames(na.omit(pred_expression[rowSums(is.infinite(pred_expression)) == 0,])))
-	if (norm_ref)
-		ref_expression <- get_norm_ref(RCTD_ref@originalSpatialRNA, ref_expression, gene_list, RCTD_ref@internal_vars$proportions)[,common_cells]
-	else
-		ref_expression <- ref_expression[gene_list,common_cells]
+	ref_expression <- ref_expression[gene_list,common_cells]
 	pred_expression <- pred_expression[gene_list,common_cells]
 	return(sum((ref_expression - pred_expression)^2) / length(ref_expression))
 }
@@ -212,18 +204,14 @@ gene.mse <- function(RCTD_ref, RCTD_pred, gene_list = NULL, norm_ref = FALSE) {
 #' @param RCTD_ref an RCTD object with reference gene expression stored in cell_type_info.
 #' @param RCTD_pred an RCTD object with predicted gene expression stored in cell_type_info.
 #' @param gene_list (default NULL) a vector of genes to be used when computing gene expression profiles. If null, selects all genes shared between the two RCTD objects.
-#' @param norm_ref (default FALSE) whether or not to normalize reference cell profiles with respect to the original puck.
 #' @return a matrix of mean squared error between log gene expression profiles between cell types.
 #' @export
-gene.mse.mat <- function(RCTD_ref, RCTD_pred, gene_list = NULL, norm_ref = FALSE) {
+gene.mse.mat <- function(RCTD_ref, RCTD_pred, gene_list = NULL) {
 	pred_expression <- data.matrix(log(RCTD_pred@cell_type_info$renorm[[1]]))
 	ref_expression <- data.matrix(log(RCTD_ref@cell_type_info$renorm[[1]]))
 	if (is.null(gene_list))
 		gene_list <- intersect(rownames(na.omit(ref_expression[rowSums(is.infinite(ref_expression)) == 0,])), rownames(na.omit(pred_expression[rowSums(is.infinite(pred_expression)) == 0,])))
-	if (norm_ref)
-		ref_expression <- get_norm_ref(RCTD_ref@originalSpatialRNA, ref_expression, gene_list, RCTD_ref@internal_vars$proportions)
-	else
-		ref_expression <- ref_expression[gene_list,]
+	ref_expression <- ref_expression[gene_list,]
 	pred_expression <- pred_expression[gene_list,]
 	ref_cells <- colnames(ref_expression); pred_cells <- colnames(pred_expression)
 	mse_mat <- matrix(,nrow = length(ref_cells), ncol = length(pred_cells))

@@ -25,7 +25,7 @@ fit.gene.expression <- function(RCTD, cell_types, CELL_MIN_INSTANCE = 25, sigma_
 #' @param cell_types a vector of cell types to be considered when refitting.
 #' @return an RCTD object, with new cell type assignments stored in results.
 #' @export
-refit.genes <- function(RCTD, cell_types) {
+fit.cell.types <- function(RCTD, cell_types) {
 	cell_type_info <- list(as.data.frame(exp(RCTD@de_results$gene_fits$mean_val)), cell_types, length(cell_types))
 	cell_type_info <- list(info = cell_type_info, renorm = cell_type_info)
 	config <- RCTD@config

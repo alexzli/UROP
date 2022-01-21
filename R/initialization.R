@@ -124,8 +124,8 @@ assign.cell.types <- function(RCTD, assignments, weight = 0.9) {
 	  barcode <- barcodes[i]
 		weights_doublet[i,] = c(weight, 1-weight)
 		results_df[i, "spot_class"] = "singlet"
-		results_df[i, "first_type"] = assignments[barcode,cell_types]
-		results_df[i, "second_type"] = assignments[barcode,cell_types]
+		results_df[i, "first_type"] = assignments[barcode,1]
+		results_df[i, "second_type"] = assignments[barcode,1]
 	}
 	rownames(results_df) = barcodes
 	RCTD@results <- list(results_df = results_df, weights_doublet = weights_doublet)
