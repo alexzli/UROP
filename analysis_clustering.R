@@ -17,9 +17,9 @@ RCTDtruth <- run.RCTD(RCTDtruth, doublet_mode = 'doublet')
 saveRDS(RCTDtruth,'../UROP/objects/RCTD_cerebellum_slideseq.rds')
 
 # load results
-RCTDlist <- readRDS('../UROP/objects/RCTD_list_clustered_3res.rds')
+RCTDlist <- readRDS('../UROP/objects/RCTD_list_clustered_23res.rds')
 RCTDtruth <- readRDS('../UROP/objects/RCTD_cerebellum_slideseq.rds')
-RCTDcluster <- readRDS('../UROP/objects/RCTD_cluster_initial_assignments_3res.rds')
+RCTDcluster <- readRDS('../UROP/objects/RCTD_cluster_initial_assignments_23res.rds')
 
 
 # generate results (cell types directly assigned)
