@@ -74,11 +74,11 @@ set_internal_vars <- function(RCTD) {
 #' Creates cell type info from cell type assignments.
 #'
 #' @param puck a SpatialRNA object to predict cell profiles.
-#' @param assignments a dataframe with cell type assignments in column labeled cell_types and rows labeled with barcodes.
+#' @param assignments a dataframe with cell type assignments in a column and rows labeled with barcodes.
 #' @return a list of cell type info that can be inputted into create.RCTD.
 #' @export
 cell_type_info_from_assignments <- function(puck, assignments) {
-	assigned_cell_types <- assignments$cell_types
+	assigned_cell_types <- assignments[colnames(puck@counts),]
 	names(assigned_cell_types) <- rownames(assignments)
 	info <- get_cell_type_info(puck@counts, assigned_cell_types, puck@nUMI)
 	return(list(info = info, renorm = info))
