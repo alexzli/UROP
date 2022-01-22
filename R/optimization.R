@@ -54,12 +54,15 @@ fit.cell.types <- function(RCTD, cell_types) {
 #' @param max_n_iter (default 20) maximum number of optimization iterations.
 #' @param convergence_cutoff (default 0.999) classification accuracy threshold for optimization to terminate early.
 #' @param discovery_threshold (default 0.99) value between 0 and 1, threshold of singlet counts between iterations for optimization to terminate early.
-#' @param constant_genes (default FALSE) whether or not gene lists change on each iteration.
+#' @param constant_genes (default TRUE) whether or not gene lists change on each iteration.
+#' @param used_reference (default FALSE) whether or not a reference was used to generate cell_type_info. If true, the fitBulk is run during the first iteration.
 #' @return a list of RCTD objects produced at each iteration of the optimization.
 #' @export
-run.iter.optim <- function(RCTD, cell_types_assigned = FALSE, cell_types = NULL, CELL_MIN_INSTANCE = 25, max_n_iter = 20, convergence_cutoff = 0.999, discovery_threshold = 0.99, constant_genes = TRUE) {
+run.iter.optim <- function(RCTD, cell_types_assigned = FALSE, cell_types = NULL, CELL_MIN_INSTANCE = 25, max_n_iter = 20, convergence_cutoff = 0.999, discovery_threshold = 0.99, constant_genes = TRUE, used_reference = FALSE) {
 	if (!cell_types_assigned) {
 		RCTD@config$RCTDmode <- 'doublet'
+		if (used_reference)
+			RCTD <- fitBulk(RCTD)
 		RCTD <- choose_sigma_c(RCTD)
 		message('run.iter.optim: assigning initial cell types')
 		RCTD <- fitPixels(RCTD, doublet_mode = 'doublet')
