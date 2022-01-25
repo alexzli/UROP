@@ -47,7 +47,7 @@ cell.confusion.mat <- function(RCTD_ref, RCTD_pred, cell_types = NULL, verbose =
 #' @param verbose (default FALSE) whether to display number of reference, predicted, and common singlets.
 #' @return a table containing cell type assignments.
 #' @export
-cell.assignment.table <- function(RCTD_truth, RCTD_pred, verbose = FALSE) {
+cell.table <- function(RCTD_truth, RCTD_pred, verbose = FALSE) {
   truth_singlet <- RCTD_truth@results$results_df
   truth_singlet <- truth_singlet[truth_singlet$spot_class == 'singlet',]
   pred_singlet <- RCTD_pred@results$results_df
@@ -76,7 +76,7 @@ cell.assignment.table <- function(RCTD_truth, RCTD_pred, verbose = FALSE) {
 #' @export
 cell.heatmap <- function(RCTD_truth, RCTD_pred, mytable = NULL, verbose = FALSE, cell_min_instance = 10) {
 	if (is.null(mytable))
-		mytable <- cell.assignment.table(RCTD_truth, RCTD_pred, verbose = verbose)
+		mytable <- cell.table(RCTD_truth, RCTD_pred, verbose = verbose)
 	mytable <- mytable[rowSums(mytable) >= cell_min_instance, ]
 	mytable <- apply(mytable, 1, function(x) x/sum(x))
 	data <- melt(mytable)
@@ -101,7 +101,7 @@ cell.heatmap <- function(RCTD_truth, RCTD_pred, mytable = NULL, verbose = FALSE,
 #' @export
 cond.entropy <- function(RCTD_truth, RCTD_pred, mytable = NULL, verbose = FALSE) {
 	if (is.null(mytable))
-		mytable <- cell.assignment.table(RCTD_truth, RCTD_pred, verbose = verbose)
+		mytable <- cell.table(RCTD_truth, RCTD_pred, verbose = verbose)
 	mytable <- mytable/sum(mytable) * log(mytable/rowSums(mytable))
 	mytable[is.nan(mytable)] <- 0
 	return(-sum(mytable))
@@ -117,8 +117,32 @@ cond.entropy <- function(RCTD_truth, RCTD_pred, mytable = NULL, verbose = FALSE)
 #' @export
 class.accuracy <- function(RCTD_truth, RCTD_pred, mytable = NULL, verbose = FALSE) {
 	if (is.null(mytable))
-		mytable <- cell.assignment.table(RCTD_truth, RCTD_pred, verbose = verbose)
+		mytable <- cell.table(RCTD_truth, RCTD_pred, verbose = verbose)
 	return(sum(apply(mytable, 1, max))/sum(mytable))
+}
+
+#' Generates plot of classification of accuracy by ground truth cell type.
+#' 
+#' @param RCTD_truth an RCTD object that has ground truth cell types stored in results.
+#' @param RCTD_pred an RCTD object that has predicted cell types stored in results.
+#' @param cell_table (default NULL) option to pass in cell assignment table directly
+#' @param verbose (default FALSE) whether to display number of reference, predicted, and common singlets.
+#' @param cell_min_instance (default 10) minimum number of ground truth cells required to be included in the heatmap.
+#' @return a plot of classification accuracy vs. cell type.
+#' @export
+class.accuracy.plot <- function(RCTD_truth, RCTD_pred, mytable = NULL, verbose = FALSE, cell_min_instance = 10) {
+	if (is.null(mytable))
+		mytable <- cell.table(RCTD_truth, RCTD_pred, verbose = verbose)
+	mytable <- mytable[rowSums(mytable) >= cell_min_instance, ]
+	mydf <- as.data.frame(apply(mytable, 1, max) / rowSums(mytable))
+	colnames(mydf) <- 'proportion'
+	mydf$cell_type <- factor(rownames(mydf))
+	p <- ggplot(mydf, aes(x=cell_type, y=proportion)) + 
+    geom_point() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    xlab('Ground Truth Cell Type')+ ylab('Classification Proportion') +
+    ylim(0,1)
+  return(p)
 }
 
 #' Finds gene expression profiles of two RCTD objects.
