@@ -30,7 +30,7 @@ compare_deconvolve <- function(RCTD, deconProp, verbose = FALSE, singlet_thresho
   colnames(pred_singlet) <- 'first_type'
   truth_types = unlist(list(truth_singlet[,'first_type']))
   pred_types = unlist(list(pred_singlet[,'first_type']))
-  table(truth_types, pred_types)
+  return(table(truth_types, pred_types))
 }
 
 # load data
@@ -45,7 +45,16 @@ cell.heatmap(mytable = mytable)
 cond.entropy(mytable = mytable)
 class.accuracy(mytable = mytable)
 
-cell.assignment.table(RCTDtruth, RCTDpred, verbose = TRUE)
+mytable <- cell.table(RCTDtruth, RCTDpred, verbose = TRUE)
 cell.heatmap(RCTDtruth, RCTDpred)
 cond.entropy(RCTDtruth, RCTDpred)
 class.accuracy(RCTDtruth, RCTDpred)
+
+
+mytable <- rbind(mytable, mytable['MLI1',] + mytable['MLI2',])
+rownames(mytable)[length(rownames(mytable))] <- 'MLI'
+mytable <- mytable[-c(which(rownames(mytable) == 'MLI1'), which(rownames(mytable) == 'MLI2')),]
+assignment.accuracy(mytable)
+assignment.accuracy.plot(mytable)
+
+
