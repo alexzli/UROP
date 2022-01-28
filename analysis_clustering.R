@@ -10,17 +10,10 @@ cell_type_info <- cell_type_info_from_assignments(puck, assignments)
 myRCTD <- create.RCTD.noref(puck, cell_type_info = cell_type_info)
 RCTDlist <- run.iter.optim(myRCTD, cell_types_assigned = FALSE, max_n_iter = 20, CELL_MIN_INSTANCE = 25, constant_genes = TRUE)
 saveRDS(RCTDlist,'../UROP/objects/RCTD_list_clustered_23res.rds')
-
 reference <- readRDS('../UROP/data/reference_RCTD_vec.rds')
 RCTDtruth <- create.RCTD(puck, reference, max_cores = 4)
 RCTDtruth <- run.RCTD(RCTDtruth, doublet_mode = 'doublet')
 saveRDS(RCTDtruth,'../UROP/objects/RCTD_cerebellum_slideseq.rds')
-
-# load results
-RCTDlist <- readRDS('../UROP/objects/RCTD_list_clustered_23res.rds')
-RCTDtruth <- readRDS('../UROP/objects/RCTD_cerebellum_slideseq.rds')
-RCTDcluster <- readRDS('../UROP/objects/RCTD_cluster_initial_assignments_23res.rds')
-
 
 # generate results (cell types directly assigned)
 puck <- readRDS('../UROP/objects/puckCropped_cerebellum_slideseq.rds')
@@ -32,13 +25,16 @@ RCTDcluster <- fit.gene.expression(RCTDcluster, levels(RCTDcluster@results$resul
 cell_type_info <- list(as.data.frame(exp(RCTDcluster@de_results$gene_fits$mean_val)), levels(RCTDcluster@results$results_df$first_type), length(levels(RCTDcluster@results$results_df$first_type)))
 cell_type_info <- list(info = cell_type_info, renorm = cell_type_info)
 saveRDS(RCTDcluster,'../UROP/objects/RCTD_cluster_initial_assignments_23res.rds')
-
 myRCTD <- create.RCTD.noref(puck, cell_type_info = cell_type_info)
 RCTDlist <- run.iter.optim(myRCTD, cell_types_assigned = FALSE, max_n_iter = 10, CELL_MIN_INSTANCE = 25, constant_genes = TRUE)
 saveRDS(RCTDlist,'../UROP/objects/RCTD_list_de_generated_info.rds')
+
+
 # load results
-RCTDlist2 <- readRDS('../UROP/objects/RCTD_list_de_generated_info.rds')
+RCTDlist <- readRDS('../UROP/objects/RCTD_list_clustered_23res.rds')
+#RCTDpred <- RCTDlist[[length(RCTDlist)]]
 RCTDtruth <- readRDS('../UROP/objects/RCTD_cerebellum_slideseq.rds')
+RCTDcluster <- readRDS('../UROP/objects/RCTD_cluster_initial_assignments_8res.rds')
 
 
 # Cell type assignments compare to initial (testing deviation from initialization point)
@@ -76,3 +72,19 @@ for (i in 1:(length(RCTDlist)-1)) {
   print(gene.mse(RCTDlist[[i]], RCTDlist[[i+1]]))
 }
 
+
+# cleaning tables
+mytable <- cell.table(RCTDtruth, RCTDpred)
+mytable <- rbind(mytable, mytable['MLI1',] + mytable['MLI2',])
+rownames(mytable)[length(rownames(mytable))] <- 'MLI'
+mytable <- mytable[-c(which(rownames(mytable) == 'MLI1'), which(rownames(mytable) == 'MLI2')),]
+assignment.accuracy(mytable, 7)
+assignment.accuracy.plot(mytable)
+
+for (i in 1:length(RCTDlist)) {
+  mytable <- cell.table(RCTDtruth, RCTDlist[[i]])
+  mytable <- rbind(mytable, mytable['MLI1',] + mytable['MLI2',])
+  rownames(mytable)[length(rownames(mytable))] <- 'MLI'
+  mytable <- mytable[-c(which(rownames(mytable) == 'MLI1'), which(rownames(mytable) == 'MLI2')),]
+  print(assignment.accuracy(mytable))
+}
