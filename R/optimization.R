@@ -58,7 +58,7 @@ fit.cell.types <- function(RCTD, cell_types) {
 #' @param used_reference (default FALSE) whether or not a reference was used to generate cell_type_info. If true, the fitBulk is run during the first iteration.
 #' @return a list of RCTD objects produced at each iteration of the optimization.
 #' @export
-run.iter.optim <- function(RCTD, cell_types_assigned = FALSE, cell_types = NULL, CELL_MIN_INSTANCE = 25, max_n_iter = 20, convergence_cutoff = 0.999, discovery_threshold = 0.99, constant_genes = TRUE, used_reference = FALSE) {
+run.iter.optim <- function(RCTD, cell_types_assigned = FALSE, cell_types = NULL, CELL_MIN_INSTANCE = 25, max_n_iter = 20, convergence_cutoff = 0.99, discovery_threshold = 0.99, constant_genes = TRUE, used_reference = FALSE) {
 	if (!cell_types_assigned) {
 		RCTD@config$RCTDmode <- 'doublet'
 		if (used_reference)
