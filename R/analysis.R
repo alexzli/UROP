@@ -145,6 +145,41 @@ class.accuracy.plot <- function(RCTD_truth, RCTD_pred, mytable = NULL, verbose =
   return(p)
 }
 
+assignment.accuracy <- function(mytable, N = NULL) {
+	cluster_assignments <- apply(mytable, 2, function(x) which(x == max(x)))
+	truth_totals <- c(dim(mytable)[1])
+	for (i in 1:dim(mytable)[1]) {
+		truth_totals[i] <- sum(mytable[i,] * (cluster_assignments == i))
+	}
+	cell_accuracy <- truth_totals / apply(mytable, 1, sum)
+	cell_accuracy <- sort(cell_accuracy, decreasing=TRUE)
+	cell_accuracy <- cell_accuracy[cell_accuracy != 0]
+	if (is.null(N))
+		N = length(cell_accuracy)
+	else 
+		N = min(length(cell_accuracy), N)
+	return(mean(cell_accuracy))
+}
+
+assignment.accuracy.plot <- function(mytable, cell_min_instance = 1) {
+	mytable <- mytable[rowSums(mytable) >= cell_min_instance, ]
+	cluster_assignments <- apply(mytable, 2, function(x) which(x == max(x)))
+	truth_totals <- c(dim(mytable)[1])
+	for (i in 1:dim(mytable)[1]) {
+		truth_totals[i] <- sum(mytable[i,] * (cluster_assignments == i))
+	}
+	mydf <- as.data.frame(truth_totals / apply(mytable, 1, sum))
+	colnames(mydf) <- 'proportion'
+	mydf$cell_type <- factor(rownames(mydf))
+	mydf <- mydf[mydf$proportion != 0,]
+	p <- ggplot(mydf, aes(x=cell_type, y=proportion)) + 
+    geom_point() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    xlab('Ground Truth Cell Type')+ ylab('Classification Proportion') +
+    ylim(0,1)
+  return(p)
+}
+
 #' Finds gene expression profiles of two RCTD objects.
 #'
 #' @param RCTD_ref an RCTD object with reference gene expression stored in cell_type_info.
