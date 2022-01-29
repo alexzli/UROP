@@ -26,3 +26,4 @@ myRCTD@config$max_cores <- 32
 
 RCTDlist <- run.iter.optim(myRCTD, cell_types_assigned = TRUE, cell_types = cell_types)
 saveRDS(RCTDlist, file.path(datadir, '/data/RCTD_list_cancer_degeneratedinfo.rds')
+
