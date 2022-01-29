@@ -158,7 +158,7 @@ assignment.accuracy <- function(mytable, N = NULL) {
 		N = length(cell_accuracy)
 	else 
 		N = min(length(cell_accuracy), N)
-	return(mean(cell_accuracy))
+	return(mean(cell_accuracy[1:N]))
 }
 
 assignment.accuracy.plot <- function(mytable, cell_min_instance = 1) {
@@ -281,6 +281,77 @@ gene.mse.mat <- function(RCTD_ref, RCTD_pred, gene_list = NULL) {
 		}
 	}
 	return(mse_mat)
+}
+
+gene.log.mse <- function(gene_expression, truth_cell, pred_cell) {
+	ref_expression <- log(gene_expression$reference[,truth_cell])
+	pred_expression <- log(gene_expression$prediction[,pred_cell])
+	diff_expression <- ref_expression - pred_expression
+	diff_expression <- na.omit(diff_expression[is.finite(diff_expression)])
+	return(sum(diff_expression^2)/ length(diff_expression))
+}
+
+gene.aggregate.mse <- function(gene_expression, cell_table) {
+	cluster_assignments <- apply(cell_table, 2, function(x) which(x == max(x)))
+	tot_mse = 0
+	for (i in 1:length(cluster_assignments)) {
+		pred_cell = i
+		truth_cell = cluster_assignments[i]
+		mse <- gene.log.mse(gene_expression, truth_cell, pred_cell)
+		tot_mse = tot_mse + mse
+	}
+	return(tot_mse/length(cluster_assignments))
+}
+
+gene.expression.rank <- function(gene_expression, truth_cell, pred_cell) {
+	ref_expression <- sort(gene_expression$reference[,truth_cell], decreasing = TRUE)
+	pred_expression <- sort(gene_expression$prediction[,pred_cell], decreasing = TRUE)
+	for (i in 1:length(ref_expression)) {
+	    ref_expression[i] = i
+	}
+	for (i in 1:length(pred_expression)) {
+	    pred_expression[i] = i
+	}
+	ref_expression <- ref_expression[order(factor(names(ref_expression)))]
+	pred_expression <- pred_expression[order(factor(names(pred_expression)))]
+	return(list(reference = ref_expression, prediction = pred_expression))
+}
+
+aggregate.gene.rank <- function(gene_expression, cell_table) {
+	cluster_assignments <- apply(cell_table, 2, function(x) which(x == max(x)))
+	pred_ranks = c()
+	ref_ranks = c()
+	for (i in 1:length(cluster_assignments)) {
+		pred_cell = i
+		truth_cell = cluster_assignments[i]
+		rank <- gene.expression.rank(gene_expression, truth_cell, pred_cell)
+		pred_ranks <- append(pred_ranks, rank$prediction)
+		ref_ranks <- append(ref_ranks, rank$reference)
+	}
+	return(list(reference = ref_ranks, prediction = pred_ranks))
+}
+
+gene.bin.plot <- function(rank, rank_lim=NA, bins = 20) {
+	rank <- as.data.frame(rank)
+	p <- ggplot(rank, aes(x=reference, y=prediction)) +
+	  geom_bin2d(bins=bins) +
+	  scale_fill_continuous(type = "viridis") +
+	  theme_bw() +
+	  xlab('Reference Gene Expression Rank') + ylab('Predicted Gene Expression Rank') +
+	  xlim(c(NA, rank_lim)) + ylim(c(NA, rank_lim))
+	return(p)
+}
+
+gene.density.plot <- function(rank, rank_lim=NA) {
+	rank <- as.data.frame(rank)
+	p <- ggplot(rank, aes(x=reference, y=prediction) ) +
+	  stat_density_2d(aes(fill = ..density..), geom = "raster", contour = FALSE) +
+	  scale_fill_distiller(palette= "Spectral", direction=1) +
+	  scale_x_continuous(expand = c(0, 0)) +
+	  scale_y_continuous(expand = c(0, 0)) +
+	  xlab('Reference Gene Expression Rank') + ylab('Predicted Gene Expression Rank') +
+	  xlim(c(NA, rank_lim)) + ylim(c(NA, rank_lim))
+	return(p)
 }
 
 #' Computes statistics of doublet weights.
