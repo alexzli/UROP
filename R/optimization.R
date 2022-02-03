@@ -15,8 +15,25 @@ fit.gene.expression <- function(RCTD, cell_types, CELL_MIN_INSTANCE = 25, sigma_
 	X <- rep(1, length(barcodes))
 	X <- as.matrix(X)
 	rownames(X) <- barcodes
-	return(run.CSIDE(RCTD, X, barcodes, cell_types, cell_type_threshold = CELL_MIN_INSTANCE, sigma_gene = sigma_gene,
-					  test_genes_sig = FALSE, params_to_test = 1))
+	RCTD <- run.CSIDE(RCTD, X, barcodes, cell_types, cell_type_threshold = CELL_MIN_INSTANCE, sigma_gene = sigma_gene,
+					  test_genes_sig = FALSE, params_to_test = 1)
+	cell_type_info <- list(as.data.frame(exp(RCTD@de_results$gene_fits$mean_val)), cell_types, length(cell_types))
+	cell_type_info <- list(info = cell_type_info, renorm = cell_type_info)
+	config <- RCTD@config
+	puck.original <- RCTD@originalSpatialRNA
+	message('fit.cell.types: getting regression differentially expressed genes: ')
+	gene_list_reg = get_de_genes(cell_type_info$info, puck.original, fc_thresh = config$fc_cutoff_reg, expr_thresh = config$gene_cutoff_reg, MIN_OBS = config$MIN_OBS)
+	if(length(gene_list_reg) == 0)
+	  stop("fit.cell.types: Error: 0 regression differentially expressed genes found")
+	message('fit.cell.types: getting platform effect normalization differentially expressed genes: ')
+	gene_list_bulk = get_de_genes(cell_type_info$info, puck.original, fc_thresh = config$fc_cutoff, expr_thresh = config$gene_cutoff, MIN_OBS = config$MIN_OBS)
+	if(length(gene_list_bulk) == 0)
+	  stop("fit.cell.types: Error: 0 bulk differentially expressed genes found")
+	puck = restrict_counts(puck.original, gene_list_bulk, UMI_thresh = config$UMI_min, UMI_max = config$UMI_max)
+	puck = restrict_puck(puck, colnames(puck@counts))
+	RCTD@internal_vars$gene_list_reg <- gene_list_reg; RCTD@internal_vars$gene_list_bulk <- gene_list_bulk
+	RCTD@spatialRNA <- puck; RCTD@cell_type_info <- cell_type_info
+	return(RCTD)
 }
 
 #' Refits cell type assignments and gene lists with RCTD based on differential expression gene fits.
@@ -55,14 +72,11 @@ fit.cell.types <- function(RCTD, cell_types) {
 #' @param convergence_cutoff (default 0.999) classification accuracy threshold for optimization to terminate early.
 #' @param discovery_threshold (default 0.99) value between 0 and 1, threshold of singlet counts between iterations for optimization to terminate early.
 #' @param constant_genes (default TRUE) whether or not gene lists change on each iteration.
-#' @param used_reference (default FALSE) whether or not a reference was used to generate cell_type_info. If true, the fitBulk is run during the first iteration.
 #' @return a list of RCTD objects produced at each iteration of the optimization.
 #' @export
-run.iter.optim <- function(RCTD, cell_types_assigned = FALSE, cell_types = NULL, CELL_MIN_INSTANCE = 25, max_n_iter = 20, convergence_cutoff = 0.99, discovery_threshold = 0.99, constant_genes = TRUE, used_reference = FALSE) {
+run.iter.optim <- function(RCTD, cell_types_assigned = FALSE, cell_types = NULL, CELL_MIN_INSTANCE = 25, max_n_iter = 20, convergence_cutoff = 0.99, discovery_threshold = 0.99, constant_genes = TRUE) {
 	if (!cell_types_assigned) {
 		RCTD@config$RCTDmode <- 'doublet'
-		if (used_reference)
-			RCTD <- fitBulk(RCTD)
 		RCTD <- choose_sigma_c(RCTD)
 		message('run.iter.optim: assigning initial cell types')
 		RCTD <- fitPixels(RCTD, doublet_mode = 'doublet')
