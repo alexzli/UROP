@@ -4,4 +4,4 @@ reuse -q R-4.0
 cd /broad/thechenlab/Alex/UROP/
 set -e
 mkdir -p logs
-Rscript simpuck_script.R > logs/iter.txt
+Rscript merfish_script.R > logs/iter.txt
