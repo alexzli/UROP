@@ -4,14 +4,25 @@ library(Matrix)
 library(Seurat)
 library(spacexr)
 
-run.semisupervised <- function(RCTD, max_cores = 4, keep_gene_list = T) {
-	if (keep_gene_list) {
-		gene_list <- RCTD@internal_vars$gene_list_reg
+run.unsupervised <- function(puck, max_cores = 4, resolution = 1, SCT = F, gene_list = NULL, info_type = 'mean', fit_genes = 'de') {
+  assignments <- gen.clusters(puck, resolution = resolution, SCT = SCT)
+  if (info_type == 'mean') {
+    cell_type_info <- cell_type_info_from_assignments(puck, assignments)
+  } else if (info_type == 'de') {
+    cell_type_info <- de_info_from_assignments(puck, assignments, gene_threshold = 5e-5)
+  } else {
+    stop(paste0("run.unsupervised: info_type=",info_type," is not a valid choice. Please set info_type=mean or de."))
+  }
+  myRCTD <- create.RCTD.noref(puck, max_cores = max_cores, cell_type_info = cell_type_info, gene_list_reg = gene_list)
+  return(iter.optim(myRCTD, fit_genes = fit_genes))
+}
+
+run.semisupervised <- function(RCTD, max_cores = 4, gene_list = NULL) {
+	if (is.null(gene_list)) {
+		gene_threshold = 5e-5
+	} else {
 		RCTD@originalSpatialRNA <- restrict_counts(RCTD@originalSpatialRNA, gene_list, UMI_thresh = 100, UMI_max = 20000000)
 		gene_threshold = 0
-	} else {
-		gene_list <- NULL
-		gene_threshold = 5e-5
 	}
 	cell_type_info <- fit.gene.expression(RCTD, gene_threshold = gene_threshold)
 	myRCTD <- create.RCTD.noref(RCTD@originalSpatialRNA, max_cores = max_cores, cell_type_info = cell_type_info, 
@@ -19,43 +30,63 @@ run.semisupervised <- function(RCTD, max_cores = 4, keep_gene_list = T) {
 	return(iter.optim(myRCTD))
 }
 
-run.unsupervised <- function(puck, max_cores = 4, resolution = 1, SCT = F, info_type = 'mean') {
-	assignments <- gen.clusters(puck, resolution = resolution, SCT = SCT)
-	if (info_type == 'mean') {
-		cell_type_info <- cell_type_info_from_assignments(puck, assignments)
-	} else if (info_type == 'de') {
-		cell_type_info <- de_info_from_assignments(puck, assignments, gene_threshold = 5e-5)
-	} else {
-		stop(paste0("run.unsupervised: info_type=",doublet_mode, " is not a valid choice. Please set info_type=mean or de."))
+iter.optim <- function(RCTD, fit_genes = 'de', cell_types = NULL, CELL_MIN_INSTANCE = 0, max_iter = 20, convergence_thresh = 0.99) {
+	RCTD@config$RCTDmode <- 'doublet'
+	RCTD <- choose_sigma_c(RCTD)
+	message('run.iter.optim: assigning initial cell types')
+	RCTD <- fitPixels(RCTD, doublet_mode = 'doublet')
+	barcodes <- intersect(names(RCTD@spatialRNA@nUMI), colnames(RCTD@spatialRNA@counts))
+	if (is.null(cell_types)) {
+		cell_type_count <- aggregate_cell_types(RCTD, barcodes, doublet_mode = T)
+		cell_types <- names(which(cell_type_count >= CELL_MIN_INSTANCE))
 	}
-	myRCTD <- create.RCTD.noref(puck, max_cores = max_cores, cell_type_info = cell_type_info)
-	return(iter.optim(myRCTD))
+	RCTD_list = list()
+	RCTD_list[[1]] <- RCTD
+	X <- as.matrix(rep(1, length(barcodes)))
+	rownames(X) <- barcodes
+	for (i in 1:max_iter) {
+		message(paste('iter.optim: running iteration', i))
+		message('fitting gene expression profiles')
+		if (fit_genes == 'de') {
+  		RCTD <- run.CSIDE(RCTD, X, barcodes, cell_types, cell_type_threshold = 0, gene_threshold = 0, sigma_gene = F, test_genes_sig = F, params_to_test = 1)
+  		info <- list(as.data.frame(exp(RCTD@de_results$gene_fits$mean_val)), cell_types, length(cell_types))
+		} else if (fit_genes == 'mean') {
+		  pred_singlets <- RCTD@results$results_df[RCTD@results$results_df$spot_class == 'singlet',]
+		  cell_type_list <- pred_singlets$first_type
+		  names(cell_type_list) <- rownames(pred_singlets)
+		  info <- get_cell_type_info(RCTD@originalSpatialRNA@counts[,rownames(pred_singlets)], cell_type_list, RCTD@originalSpatialRNA@nUMI[rownames(pred_singlets)])
+		} else if (fit_genes == 'singlet de') {
+			RCTD@results$results_df[RCTD@results$results_df$spot_class != 'singlet',]$spot_class <- 'reject'
+			RCTD <- run.CSIDE(RCTD, X, barcodes, cell_types, cell_type_threshold = 0, gene_threshold = 0, sigma_gene = F, test_genes_sig = F, params_to_test = 1)
+  		info <- list(as.data.frame(exp(RCTD@de_results$gene_fits$mean_val)), cell_types, length(cell_types))
+		} else {
+		  stop(paste0("iter.optim: fit_genes=",fit_genes," is not a valid choice. Please set fit_genes=mean, de, or singlet de."))
+		}
+		cell_type_info <- list(info = info, renorm = info)
+		RCTD@cell_type_info <- cell_type_info
+		message('fitting cell types')
+		RCTD <- fitPixels(RCTD)
+		RCTD_list[[i+1]] <- RCTD
+		accuracy = assignment_accuracy(RCTD_list[[i]], RCTD_list[[i+1]])
+		message(paste('pixel assignment accuracy:', accuracy))
+		if (accuracy > convergence_thresh)
+			break
+	}
+	return(RCTD_list)
 }
 
-gen.clusters <- function(puck, resolution = 1, SCT = F) {
-	slide.seq <- CreateSeuratObject(counts = puck@counts)
-	# data preprocessing
-	if (SCT) {
-		slide.seq <- SCTransform(slide.seq, ncells = 3000, verbose = F)
-	} else {
-		slide.seq <- NormalizeData(slide.seq)
-		slide.seq <- FindVariableFeatures(slide.seq)
-		slide.seq <- ScaleData(slide.seq)
-	}
-	# dimensionality reduction and clustering
-	slide.seq <- RunPCA(slide.seq)
-	slide.seq <- FindNeighbors(slide.seq, dims = 1:30)
-	slide.seq <- FindClusters(slide.seq, resolution = resolution, verbose = F)
-	assignments <- slide.seq@meta.data['seurat_clusters']
-	colnames(assignments) <- 'cell_types'
-	return(assignments)
-}
-
-cell_type_info_from_assignments <- function(puck, assignments) {
-	assigned_cell_types <- assignments[colnames(puck@counts),]
-	names(assigned_cell_types) <- rownames(assignments)
-	info <- get_cell_type_info(puck@counts, assigned_cell_types, puck@nUMI)
-	return(list(info = info, renorm = info))
+assignment_accuracy <- function(RCTD1, RCTD2) {
+  results1 <- RCTD1@results$results_df[,1:3]
+  results2 <- RCTD2@results$results_df[,1:3]
+  placeholder <- levels(results1$first_type)[1]
+  results1[results1$spot_class == 'singlet',]$second_type <- placeholder
+  results1[results1$spot_class == 'reject',]$first_type <- placeholder
+  results1[results1$spot_class == 'reject',]$second_type <- placeholder
+  results2[results2$spot_class == 'singlet',]$second_type <- placeholder
+  results2[results2$spot_class == 'reject',]$first_type <- placeholder
+  results2[results2$spot_class == 'reject',]$second_type <- placeholder
+  common <- as.data.frame(results1 == results2)
+  dim(common[common$spot_class & common$first_type & common$second_type,])[1] / dim(results1)[1]
 }
 
 create.RCTD.noref <- function(spatialRNA, max_cores = 4, gene_cutoff_reg = 0.0002, fc_cutoff_reg = 0.75, UMI_min = 100, UMI_max = 20000000, 
@@ -69,8 +100,8 @@ create.RCTD.noref <- function(spatialRNA, max_cores = 4, gene_cutoff_reg = 0.000
 		cell_type_info <- list(info = list(data.frame(), c(), 0), renorm = list(data.frame(), c(), 0))
 		puck = puck.original
 	} else {
-		message("create.RCTD.noref: getting regression differentially expressed genes: ")
 		if (is.null(gene_list_reg))
+			message("create.RCTD.noref: getting regression differentially expressed genes: ")
 			gene_list_reg = get_de_genes(cell_type_info$info, puck.original, fc_thresh = config$fc_cutoff_reg, expr_thresh = config$gene_cutoff_reg, MIN_OBS = config$MIN_OBS)
 		if(length(gene_list_reg) == 0)
 		  stop("create.RCTD.noref: Error: 0 regression differentially expressed genes found")
@@ -85,51 +116,11 @@ create.RCTD.noref <- function(spatialRNA, max_cores = 4, gene_cutoff_reg = 0.000
 	new("RCTD", spatialRNA = puck, originalSpatialRNA = puck.original, reference = reference, config = config, cell_type_info = cell_type_info, internal_vars = internal_vars)
 }
 
-iter.optim <- function(RCTD, cell_types = NULL, CELL_MIN_INSTANCE = 0, max_n_iter = 20, convergence_cutoff = 0.999, discovery_threshold = 0.99) {
-	RCTD@config$RCTDmode <- 'doublet'
-	RCTD <- choose_sigma_c(RCTD)
-	message('run.iter.optim: assigning initial cell types')
-	RCTD <- fitPixels(RCTD, doublet_mode = 'doublet')
-	barcodes <- intersect(names(RCTD@spatialRNA@nUMI), colnames(RCTD@spatialRNA@counts))
-	if (is.null(cell_types)) {
-		cell_type_count <- aggregate_cell_types(RCTD, barcodes, doublet_mode = T)
-		cell_types <- names(which(cell_type_count >= CELL_MIN_INSTANCE))
-	}
-	RCTD_list = list()
-	RCTD_list[[1]] <- RCTD
-	X <- as.matrix(rep(1, length(barcodes)))
-	rownames(X) <- barcodes
-	for (i in 1:max_n_iter) {
-		message(paste('run.iter.optim: running iteration', i))
-		message('fitting gene expression profiles')
-		RCTD <- run.CSIDE(RCTD, X, barcodes, cell_types, cell_type_threshold = 0, gene_threshold = 0, sigma_gene = F, test_genes_sig = F, params_to_test = 1)
-		message('fitting cell types')
-		info <- list(as.data.frame(exp(RCTD@de_results$gene_fits$mean_val)), cell_types, length(cell_types))
-		cell_type_info <- list(info = info, renorm = info)
-		RCTD@cell_type_info <- cell_type_info
-		RCTD <- fitPixels(RCTD)
-		RCTD_list[[i+1]] <- RCTD
-		accuracy <- singlet_accuracy(RCTD_list[[i]], RCTD_list[[i+1]], cell_types)
-		n_singlets <- dim(RCTD@results$results_df[RCTD@results$results_df$spot_class == 'singlet',])[1]
-		prev_singlets <- dim(RCTD_list[[i]]@results$results_df[RCTD_list[[i]]@results$results_df$spot_class == 'singlet',])[1]
-		message(paste('classification convergence accuracy:', accuracy))
-		if (accuracy >= convergence_cutoff & discovery_threshold <= n_singlets/prev_singlets & 1/discovery_threshold >= n_singlets/prev_singlets)
-			break
-	}
-	return(RCTD_list)
-}
-
-singlet_accuracy <- function(RCTD_ref, RCTD_pred, cell_types) {
-	ref_singlet <- RCTD_ref@results$results_df
-	ref_singlet <- ref_singlet[ref_singlet$spot_class == 'singlet' & is.element(ref_singlet$first_type, cell_types),]
-	pred_singlet <- RCTD_pred@results$results_df
-	pred_singlet <- pred_singlet[pred_singlet$spot_class == 'singlet' & is.element(pred_singlet$first_type, cell_types),]
-	common_barcode <- intersect(row.names(ref_singlet), row.names(pred_singlet))
-	ref_singlet <- ref_singlet[common_barcode,]
-	pred_singlet <- pred_singlet[common_barcode,]
-	ref_types = unlist(list(ref_singlet[,'first_type']))
-	pred_types = unlist(list(pred_singlet[,'first_type']))
-	return(confusionMatrix(pred_types, ref_types)$overall['Accuracy'])
+cell_type_info_from_assignments <- function(puck, assignments) {
+	assigned_cell_types <- assignments[colnames(puck@counts),]
+	names(assigned_cell_types) <- rownames(assignments)
+	info <- get_cell_type_info(puck@counts, assigned_cell_types, puck@nUMI)
+	return(list(info = info, renorm = info))
 }
 
 de_info_from_assignments <- function(puck, assignments, gene_threshold = 0) {
@@ -137,6 +128,36 @@ de_info_from_assignments <- function(puck, assignments, gene_threshold = 0) {
 	myRCTD <- set_internal_vars(myRCTD)
 	myRCTD <- assign.cell.types(myRCTD, assignments)
 	return(fit.gene.expression(myRCTD, gene_threshold = gene_threshold))
+}
+
+gen.clusters <- function(puck, resolution = 1, SCT = F) {
+	slide.seq <- CreateSeuratObject(counts = puck@counts)
+	if (SCT) {
+		slide.seq <- SCTransform(slide.seq, ncells = 3000, verbose = F)
+	} else {
+		slide.seq <- NormalizeData(slide.seq)
+		slide.seq <- FindVariableFeatures(slide.seq)
+		slide.seq <- ScaleData(slide.seq)
+	}
+	slide.seq <- RunPCA(slide.seq)
+	slide.seq <- FindNeighbors(slide.seq, dims = 1:30)
+	slide.seq <- FindClusters(slide.seq, resolution = resolution, verbose = F)
+	assignments <- slide.seq@meta.data['seurat_clusters']
+	colnames(assignments) <- 'cell_types'
+	return(assignments)
+}
+
+fit.gene.expression <- function(RCTD, cell_types = NULL, cell_type_threshold = 0, gene_threshold = 0) {
+	if (is.null(cell_types))
+		cell_types <- levels(RCTD@results$results_df$first_type)
+	barcodes <- intersect(names(RCTD@spatialRNA@nUMI), colnames(RCTD@spatialRNA@counts))
+	X <- rep(1, length(barcodes))
+	X <- as.matrix(X)
+	rownames(X) <- barcodes
+	RCTD <- run.CSIDE(RCTD, X, barcodes, cell_types, cell_type_threshold = cell_type_threshold, gene_threshold = gene_threshold, 
+										sigma_gene = F, test_genes_sig = F, params_to_test = 1)
+	cell_type_info <- list(as.data.frame(exp(RCTD@de_results$gene_fits$mean_val)), cell_types, length(cell_types))
+	return(list(info = cell_type_info, renorm = cell_type_info))
 }
 
 assign.cell.types <- function(RCTD, assignments, weight = 0.9) {
@@ -177,17 +198,4 @@ set_internal_vars <- function(RCTD) {
   RCTD@internal_vars$Q_mat <- Q_mat_all[[as.character(sigma)]]
   RCTD@internal_vars$X_vals <- X_vals
   return(RCTD)
-}
-
-fit.gene.expression <- function(RCTD, cell_types = NULL, cell_type_threshold = 0, gene_threshold = 0) {
-	if (is.null(cell_types))
-		cell_types <- levels(RCTD@results$results_df$first_type)
-	barcodes <- intersect(names(RCTD@spatialRNA@nUMI), colnames(RCTD@spatialRNA@counts))
-	X <- rep(1, length(barcodes))
-	X <- as.matrix(X)
-	rownames(X) <- barcodes
-	RCTD <- run.CSIDE(RCTD, X, barcodes, cell_types, cell_type_threshold = cell_type_threshold, gene_threshold = gene_threshold, 
-										sigma_gene = F, test_genes_sig = F, params_to_test = 1)
-	cell_type_info <- list(as.data.frame(exp(RCTD@de_results$gene_fits$mean_val)), cell_types, length(cell_types))
-	return(list(info = cell_type_info, renorm = cell_type_info))
 }
