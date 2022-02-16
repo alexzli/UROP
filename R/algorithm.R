@@ -4,6 +4,7 @@ library(Matrix)
 library(Seurat)
 library(spacexr)
 
+
 run.unsupervised <- function(puck, max_cores = 4, resolution = 1, SCT = F, gene_list = NULL, info_type = 'mean', fit_genes = 'de') {
   assignments <- gen.clusters(puck, resolution = resolution, SCT = SCT)
   if (info_type == 'mean') {
@@ -16,6 +17,7 @@ run.unsupervised <- function(puck, max_cores = 4, resolution = 1, SCT = F, gene_
   myRCTD <- create.RCTD.noref(puck, max_cores = max_cores, cell_type_info = cell_type_info, gene_list_reg = gene_list)
   return(iter.optim(myRCTD, fit_genes = fit_genes))
 }
+
 
 run.semisupervised <- function(RCTD, max_cores = 4, gene_list = NULL) {
 	if (is.null(gene_list)) {
@@ -30,7 +32,8 @@ run.semisupervised <- function(RCTD, max_cores = 4, gene_list = NULL) {
 	return(iter.optim(myRCTD))
 }
 
-iter.optim <- function(RCTD, fit_genes = 'de', cell_types = NULL, CELL_MIN_INSTANCE = 0, max_iter = 20, convergence_thresh = 0.99) {
+
+iter.optim <- function(RCTD, fit_genes = 'de', cell_types = NULL, CELL_MIN_INSTANCE = 0, max_iter = 50, convergence_thresh = 0.999) {
 	RCTD@config$RCTDmode <- 'doublet'
 	RCTD <- choose_sigma_c(RCTD)
 	message('run.iter.optim: assigning initial cell types')
@@ -75,6 +78,7 @@ iter.optim <- function(RCTD, fit_genes = 'de', cell_types = NULL, CELL_MIN_INSTA
 	return(RCTD_list)
 }
 
+
 assignment_accuracy <- function(RCTD1, RCTD2) {
   results1 <- RCTD1@results$results_df[,1:3]
   results2 <- RCTD2@results$results_df[,1:3]
@@ -89,6 +93,7 @@ assignment_accuracy <- function(RCTD1, RCTD2) {
   dim(common[common$spot_class & common$first_type & common$second_type,])[1] / dim(results1)[1]
 }
 
+
 create.RCTD.noref <- function(spatialRNA, max_cores = 4, gene_cutoff_reg = 0.0002, fc_cutoff_reg = 0.75, UMI_min = 100, UMI_max = 20000000, 
 							  UMI_min_sigma = 300, MAX_MULTI_TYPES = 4, cell_type_info = NULL, gene_list_reg = NULL, class_df = NULL) {
 
@@ -100,9 +105,10 @@ create.RCTD.noref <- function(spatialRNA, max_cores = 4, gene_cutoff_reg = 0.000
 		cell_type_info <- list(info = list(data.frame(), c(), 0), renorm = list(data.frame(), c(), 0))
 		puck = puck.original
 	} else {
-		if (is.null(gene_list_reg))
+		if (is.null(gene_list_reg)) {
 			message("create.RCTD.noref: getting regression differentially expressed genes: ")
 			gene_list_reg = get_de_genes(cell_type_info$info, puck.original, fc_thresh = config$fc_cutoff_reg, expr_thresh = config$gene_cutoff_reg, MIN_OBS = config$MIN_OBS)
+		}
 		if(length(gene_list_reg) == 0)
 		  stop("create.RCTD.noref: Error: 0 regression differentially expressed genes found")
 		puck = restrict_counts(spatialRNA, gene_list_reg, UMI_thresh = config$UMI_min, UMI_max = config$UMI_max)
@@ -116,6 +122,7 @@ create.RCTD.noref <- function(spatialRNA, max_cores = 4, gene_cutoff_reg = 0.000
 	new("RCTD", spatialRNA = puck, originalSpatialRNA = puck.original, reference = reference, config = config, cell_type_info = cell_type_info, internal_vars = internal_vars)
 }
 
+
 cell_type_info_from_assignments <- function(puck, assignments) {
 	assigned_cell_types <- assignments[colnames(puck@counts),]
 	names(assigned_cell_types) <- rownames(assignments)
@@ -123,12 +130,14 @@ cell_type_info_from_assignments <- function(puck, assignments) {
 	return(list(info = info, renorm = info))
 }
 
+
 de_info_from_assignments <- function(puck, assignments, gene_threshold = 0) {
 	myRCTD <- create.RCTD.noref(puck)
 	myRCTD <- set_internal_vars(myRCTD)
 	myRCTD <- assign.cell.types(myRCTD, assignments)
 	return(fit.gene.expression(myRCTD, gene_threshold = gene_threshold))
 }
+
 
 gen.clusters <- function(puck, resolution = 1, SCT = F) {
 	slide.seq <- CreateSeuratObject(counts = puck@counts)
@@ -147,6 +156,7 @@ gen.clusters <- function(puck, resolution = 1, SCT = F) {
 	return(assignments)
 }
 
+
 fit.gene.expression <- function(RCTD, cell_types = NULL, cell_type_threshold = 0, gene_threshold = 0) {
 	if (is.null(cell_types))
 		cell_types <- levels(RCTD@results$results_df$first_type)
@@ -159,6 +169,7 @@ fit.gene.expression <- function(RCTD, cell_types = NULL, cell_type_threshold = 0
 	cell_type_info <- list(as.data.frame(exp(RCTD@de_results$gene_fits$mean_val)), cell_types, length(cell_types))
 	return(list(info = cell_type_info, renorm = cell_type_info))
 }
+
 
 assign.cell.types <- function(RCTD, assignments, weight = 0.9) {
 	RCTD@internal_vars$cell_types_assigned <- T
@@ -186,6 +197,7 @@ assign.cell.types <- function(RCTD, assignments, weight = 0.9) {
 	RCTD@results <- list(results_df = results_df, weights_doublet = weights_doublet)
   	return(RCTD)
 }
+
 
 set_internal_vars <- function(RCTD) {
   puck = RCTD@spatialRNA; MIN_UMI = RCTD@config$UMI_min_sigma; sigma = 100
