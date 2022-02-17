@@ -3,8 +3,8 @@ source(file.path(datadir, '/R/algorithm.R'))
 
 
 # LOAD DATA
-myRCTD <- readRDS(file.path(datadir, '/data/myRCTD_201014_03.rds'))
-results <- read.csv(file = file.path(datadir, '/data/results_processed_slideseq_data_2020-12-12_Puck_201014_03_2020-12-12_Puck_201014_03_cell_types.csv'))
+myRCTD <- readRDS(file.path(datadir, '/Data/myRCTD_201014_03.rds'))
+results <- read.csv(file = file.path(datadir, '/Data/results_processed_slideseq_data_2020-12-12_Puck_201014_03_2020-12-12_Puck_201014_03_cell_types.csv'))
 
 
 # DATA PREPROCESSING
