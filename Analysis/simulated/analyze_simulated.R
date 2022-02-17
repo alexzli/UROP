@@ -1,6 +1,6 @@
-datadir <- '/UROP/'
-source(file.path(datadir, '/R/ITERATIVE_OPTIMIZATION.R'))
-source(file.path(datadir, '/R/analysis.R'))
+datadir <- '~/UROP'
+source(file.path(datadir, 'R/algorithm.R'))
+source(file.path(datadir, 'R/analysis.R'))
 
 
 # load puck
@@ -9,7 +9,7 @@ results <- readRDS(file.path(datadir, '/data/sim_puck_results.rds'))
 
 
 # analyze singlets
-RCTD_list <- readRDS(file.path(datadir, '/Objects/simpuck_results/sim_puck_results_de_fit.rds'))
+RCTD_list <- readRDS(file.path(datadir, 'objects/sim_puck_results_de_fit.rds'))
 RCTDpred <- RCTD_list[[length(RCTD_list)]]
 pred_results <- RCTDpred@results$results_df
 truth_types = c()
@@ -128,15 +128,15 @@ p2
 
 ## SINGLET SCORE ANAYLSES
 
-RCTD_list <- readRDS(file.path(datadir, '/Objects/simpuck_results/sim_puck_results_de_fit.rds'))
-RCTDpred <- RCTD_list[[7]]
+RCTD_list <- readRDS(file.path(datadir, 'Objects/sim_puck_results_de_fit.rds'))
+RCTDpred <- RCTD_list[[length(RCTD_list)]]
 pred_results <- RCTDpred@results$results_df
 #berg_purk_truth <- results[results$type1 == 'Bergmann' & results$type2 == 'Purkinje',]
 #berg_purk_pred <- pred_results[rownames(berg_purk_truth),]
 #purk_pred <- berg_purk_pred[berg_purk_pred$first_type == '4' & berg_purk_pred$spot_class == 'singlet',]
 
 
-# singlet score vs. purkinje proportion
+# singlet score vs. purkinje proportion for singlets
 purk_singlets <- pred_results[pred_results$first_type == '4' & pred_results$spot_class == 'singlet',]
 purk_weights <- RCTDpred@results$weights_doublet[rownames(purk_singlets),'first_type']
 names(purk_weights) <- purk_singlets$singlet_score
@@ -144,7 +144,7 @@ purk_weights <- as.data.frame(purk_weights)
 purk_weights$singlet_score <- as.numeric(rownames(purk_weights))
 
 my_pal = pals::coolwarm(20)
-coeff <- 600
+coeff <- 1000
 p2 <- ggplot(purk_weights, aes(x=singlet_score)) + 
   geom_histogram(bins=15, fill=my_pal[2], col='#ffffff', alpha=0.9) +
   stat_summary_bin(aes(singlet_score, (purk_weights-0.8)*coeff),fun='mean', bins = 14, size=0.5, geom='line') +
@@ -154,6 +154,28 @@ p2 <- ggplot(purk_weights, aes(x=singlet_score)) +
     sec.axis = sec_axis(~./coeff + 0.8, name="Purkinje Proportion")
   ) +           
   theme_classic()
+p2
+
+
+# singlet_score - min_score vs. purkinje proportion
+purk_singlets <- pred_results[pred_results$first_type == '4' & pred_results$spot_class == 'singlet',]
+purk_weights <- RCTDpred@results$weights_doublet[rownames(purk_singlets),'first_type']
+names(purk_weights) <- purk_singlets$singlet_score - purk_singlets$min_score
+purk_weights <- as.data.frame(purk_weights)
+purk_weights$singlet_score <- as.numeric(rownames(purk_weights))
+
+my_pal = pals::coolwarm(20)
+coeff <- 600
+p2 <- ggplot(purk_weights, aes(x=singlet_score)) + 
+  geom_histogram(bins=26, fill=my_pal[2], col='#ffffff', alpha=0.9) +
+  stat_summary_bin(aes(singlet_score, (purk_weights-0.8)*coeff),fun='mean', bins = 26, size=0.5, geom='line') +
+  stat_summary_bin(aes(singlet_score, (purk_weights-0.8)*coeff),fun='mean', bins = 26, size=1, geom='point') +
+  scale_y_continuous(
+    name = "Count",
+    sec.axis = sec_axis(~./coeff + 0.8, name="Purkinje Proportion")
+  ) +           
+  theme_classic() +
+  xlab('singlet_score - min_score')
 p2
 
 
@@ -176,4 +198,27 @@ p2 <- ggplot(counts_df, aes(x=score, y=counts)) +
   stat_summary_bin(aes(score, counts),fun.data = mean_se, geom='errorbar',
                    bins= 8, size= 0.3)  +
   theme_classic()
+p2
+
+
+# singlet_score - min_score vs. marker gene expression
+marker_data_de <- readRDS(file.path(datadir, '/Data/marker_data_de_standard.RDS'))
+berg_genes <- rownames(marker_data_de)[marker_data_de$cell_type == "Bergmann"]
+purk_genes <- rownames(marker_data_de)[marker_data_de$cell_type == "Purkinje"]
+purk_singlets <- pred_results[pred_results$first_type == '4' & pred_results$spot_class == 'singlet',]
+
+purk_puck <- puck@counts[purk_genes,rownames(purk_singlets)]
+counts_df <- as.data.frame(colSums(purk_puck))
+counts_df$singlet_score <- purk_singlets$singlet_score - purk_singlets$min_score
+colnames(counts_df) <- c('counts', 'score')
+p2 <- ggplot(counts_df, aes(x=score, y=counts)) + geom_point(size = 0.5)
+p2
+
+p2 <- ggplot(counts_df, aes(x=score, y=counts)) + 
+  stat_summary_bin(aes(score, counts),fun='mean', bins = 6, size=0.3, geom='line') +
+  stat_summary_bin(aes(score, counts),fun='mean', bins = 6, size=0.8, geom='point') +
+  stat_summary_bin(aes(score, counts),fun.data = mean_se, geom='line',
+                   bins= 6, size= 0.3)  +
+  theme_classic() +
+  xlab('singlet_score - min_score')
 p2
