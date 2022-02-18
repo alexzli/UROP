@@ -72,7 +72,7 @@ generate_sim_puck <- function(common_cell_types, gene_list, ref, trials = 30, UM
 reference <- readRDS(file.path(datadir, 'data/reference_RCTD_vec.rds'))
 cell_types <- c('Astrocytes', 'Bergmann', 'Fibroblast', 'Golgi', 'Granule', 'MLI1', 'MLI2', 'Oligodendrocytes', 'Polydendrocytes', 'Purkinje')
 
-for (i in 1:10) {
+for (i in 1:5) {
   UMI_tot = 100 * i
   beads_list <- generate_sim_puck(cell_types, rownames(reference@counts), reference, trials=10, UMI_tot=UMI_tot)
   if (i == 1) {
@@ -86,5 +86,5 @@ for (i in 1:10) {
 colnames(beads) <- 1:dim(beads)[2]
 rownames(results) <- 1:dim(beads)[2]
 puck <- SpatialRNA(NULL, beads, use_fake_coords = T)
-saveRDS(puck, file.path(datadir, 'data/sim_puck_variableUMI.rds'))
-saveRDS(results, file.path(datadir, 'data/sim_puck_variableUMI_truth.rds'))
+saveRDS(puck, file.path(datadir, 'data/sim_puck_variableUMI_small.rds'))
+saveRDS(results, file.path(datadir, 'data/sim_puck_variableUMI_small_truth.rds'))
