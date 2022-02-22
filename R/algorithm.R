@@ -3,10 +3,11 @@ library(doParallel)
 library(Matrix)
 library(Seurat)
 library(spacexr)
+library(cluster)
 
 
-run.unsupervised <- function(puck, max_cores = 4, resolution = 1, SCT = F, gene_list = NULL, info_type = 'mean', fit_genes = 'de') {
-  assignments <- gen.clusters(puck, resolution = resolution, SCT = SCT)
+run.unsupervised <- function(puck, max_cores = 4, resolution = 1, silhouette_cutoff = 0, SCT = T, gene_list = NULL, info_type = 'mean', fit_genes = 'de') {
+  assignments <- gen.clusters(puck, resolution = resolution, silhouette_cutoff = silhouette_cutoff, SCT = SCT)
   if (info_type == 'mean') {
     cell_type_info <- cell_type_info_from_assignments(puck, assignments)
   } else if (info_type == 'de') {
@@ -124,9 +125,11 @@ create.RCTD.noref <- function(spatialRNA, max_cores = 4, gene_cutoff_reg = 0.000
 
 
 cell_type_info_from_assignments <- function(puck, assignments) {
-	assigned_cell_types <- assignments[colnames(puck@counts),]
+	counts <- puck@counts[, rownames(assignments)]
+	nUMI <- puck@nUMI[rownames(assignments)]
+	assigned_cell_types <- assignments$cell_types
 	names(assigned_cell_types) <- rownames(assignments)
-	info <- get_cell_type_info(puck@counts, assigned_cell_types, puck@nUMI)
+	info <- get_cell_type_info(counts, assigned_cell_types, nUMI)
 	return(list(info = info, renorm = info))
 }
 
@@ -139,20 +142,28 @@ de_info_from_assignments <- function(puck, assignments, gene_threshold = 0) {
 }
 
 
-gen.clusters <- function(puck, resolution = 1, SCT = F) {
-	slide.seq <- CreateSeuratObject(counts = puck@counts)
+gen.clusters <- function(puck, resolution = 1, SCT = T, silhouette_cutoff = 0) {
+	slide.seq <- CreateSeuratObject(counts = puck@counts, assay = "Spatial")
 	if (SCT) {
-		slide.seq <- SCTransform(slide.seq, ncells = 3000, verbose = F)
+		slide.seq <- SCTransform(slide.seq, assay = "Spatial", verbose = F)
+		slide.seq <- RunPCA(slide.seq, assay = "SCT")
 	} else {
 		slide.seq <- NormalizeData(slide.seq)
 		slide.seq <- FindVariableFeatures(slide.seq)
 		slide.seq <- ScaleData(slide.seq)
+		slide.seq <- RunPCA(slide.seq)
 	}
-	slide.seq <- RunPCA(slide.seq)
 	slide.seq <- FindNeighbors(slide.seq, dims = 1:30)
 	slide.seq <- FindClusters(slide.seq, resolution = resolution, verbose = F)
 	assignments <- slide.seq@meta.data['seurat_clusters']
 	colnames(assignments) <- 'cell_types'
+	message(paste0("cell types: ",paste(levels(assignments$cell_types), collapse = ', ')))
+	# assign silhouette scores, not yet compatible with de_info_from_assignments
+	distance_matrix <- dist(Embeddings(slide.seq[['pca']])[, 1:30])
+	clusters <- slide.seq@meta.data$seurat_clusters
+	silhouette <- silhouette(as.numeric(clusters), dist = distance_matrix)
+	assignments$silhouette <- silhouette[, 3]
+	assignments <- assignments[assignments$silhouette > silhouette_cutoff,]
 	return(assignments)
 }
 
