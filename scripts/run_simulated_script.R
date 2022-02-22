@@ -1,6 +1,5 @@
 datadir <- '/broad/thechenlab/Alex/UROP/'
-.libPaths( c( .libPaths(), file.path(datadir, 'Rpcg')))
-library(spacexr)
+.libPaths(file.path(datadir, 'Rpcg'))
 source(file.path(datadir, '/R/algorithm.R'))
 
 
