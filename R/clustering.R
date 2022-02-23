@@ -9,7 +9,7 @@ library(cluster)
 #' @param SCT (default TRUE) whether to use regularized negative binomial regression to normalize count data.
 #' @return a dataframe with bead barcodes as rownames and assigned cluster number as values.
 #' @export
-gen.clusters <- function(puck, resolution = 1, SCT = T, silhouette_cutoff = 0) {
+gen.clusters <- function(puck, resolution = 1, SCT = T, silhouette_cutoff = 0.75) {
   slide.seq <- CreateSeuratObject(counts = puck@counts, assay = "Spatial")
   if (SCT) {
     slide.seq <- SCTransform(slide.seq, assay = "Spatial", verbose = F)
@@ -30,7 +30,13 @@ gen.clusters <- function(puck, resolution = 1, SCT = T, silhouette_cutoff = 0) {
   clusters <- slide.seq@meta.data$seurat_clusters
   silhouette <- silhouette(as.numeric(clusters), dist = distance_matrix)
   assignments$silhouette <- silhouette[, 3]
-  assignments <- assignments[assignments$silhouette > silhouette_cutoff,]
+  cutoffs <- c()
+  for (cell_type in levels(assignments$cell_types)) {
+    cutoff <- quantile(assignments[assignments$cell_types == cell_type,]$silhouette, probs=silhouette_cutoff)
+    cutoffs <- append(cutoffs, cutoff)
+  }
+  names(cutoffs) <- levels(assignments$cell_types)
+  assignments <- assignments[assignments$silhouette > cutoffs[assignments$cell_types],]
   return(assignments)
 }
 

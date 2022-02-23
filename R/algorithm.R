@@ -160,11 +160,18 @@ gen.clusters <- function(puck, resolution = 1, SCT = T, silhouette_cutoff = 0) {
 	message(paste0("cell types: ",paste(levels(assignments$cell_types), collapse = ', ')))
 	# assign silhouette scores, not yet compatible with de_info_from_assignments
 	distance_matrix <- dist(Embeddings(slide.seq[['pca']])[, 1:30])
-	clusters <- slide.seq@meta.data$seurat_clusters
-	silhouette <- silhouette(as.numeric(clusters), dist = distance_matrix)
-	assignments$silhouette <- silhouette[, 3]
-	assignments <- assignments[assignments$silhouette > silhouette_cutoff,]
-	return(assignments)
+  clusters <- slide.seq@meta.data$seurat_clusters
+  silhouette <- silhouette(as.numeric(clusters), dist = distance_matrix)
+  assignments$silhouette <- silhouette[, 3]
+  #assignments <- assignments[assignments$silhouette > 0, ]
+  cutoffs <- c()
+  for (cell_type in levels(assignments$cell_types)) {
+    cutoff <- quantile(assignments[assignments$cell_types == cell_type,]$silhouette, probs=silhouette_cutoff)
+    cutoffs <- append(cutoffs, cutoff)
+  }
+  names(cutoffs) <- levels(assignments$cell_types)
+  assignments <- assignments[assignments$silhouette > cutoffs[assignments$cell_types],]
+  return(assignments)
 }
 
 
