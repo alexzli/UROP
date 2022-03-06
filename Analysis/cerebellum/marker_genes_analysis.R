@@ -1,17 +1,30 @@
-datadir <- '/UROP/'
+datadir <- '~/UROP'
 source(file.path(datadir, '/R/analysis.R'))
 
-RCTDtruth <- readRDS(file.path(datadir, '/Objects/RCTD_cerebellum_slideseq.rds'))
-RCTDlist <- readRDS('../UROP/results/sim_puck_results_mean_init.rds')
-RCTDpred <- RCTD_list[[length(RCTD_list)]]
-cell.table(RCTDtruth, RCTDpred)
+RCTD_list <- readRDS(file.path(datadir, 'Objects/cerebellum_5_15.rds'))
+RCTD_pred <- RCTD_list[[length(RCTD_list)]]
+RCTD_truth <- readRDS(file.path(datadir, 'data/RCTD_cerebellum_slideseq.rds'))
+pred_results <- RCTD_pred@results$results_df
+truth_results <- RCTD_truth@results$results_df
 
-marker_data_de <- readRDS(file.path(datadir, '/Data/marker_data_de_standard.RDS'))
+singlet_table <- function(truth_results, pred_results) {
+  truth_singlet <- truth_results[truth_results$spot_class == 'singlet',]
+  pred_singlet <- pred_results[pred_results$spot_class == 'singlet',]
+  common_barcode <- intersect(row.names(truth_singlet), row.names(pred_singlet))
+  truth_singlet <- truth_singlet[common_barcode,]
+  pred_singlet <- pred_singlet[common_barcode,]
+  truth_types = unlist(list(truth_singlet[,'first_type']))
+  pred_types = unlist(list(pred_singlet[,'first_type']))
+  return(table(truth_types, pred_types))
+}
+mytable <- singlet_table(truth_results, pred_results)
+
+marker_data_de <- readRDS(file.path(datadir, 'Data/marker_data_de_standard.RDS'))
 berg_genes <- rownames(marker_data_de)[marker_data_de$cell_type == "Bergmann"]
 purk_genes <- rownames(marker_data_de)[marker_data_de$cell_type == "Purkinje"]
 
-berg_log_df <- log(RCTDpred@cell_type_info$renorm[[1]][berg_genes,c('8','4')])
-purk_log_df <- log(RCTDpred@cell_type_info$renorm[[1]][purk_genes,c('8','4')])
+berg_log_df <- log(RCTD_pred@cell_type_info$renorm[[1]][berg_genes,c('2','5')])
+purk_log_df <- log(RCTD_pred@cell_type_info$renorm[[1]][purk_genes,c('2','5')])
 colnames(berg_log_df) <- c('Bergmann', 'Purkinje')
 colnames(purk_log_df) <- c('Bergmann', 'Purkinje')
 x <- berg_log_df$Bergmann-berg_log_df$Purkinje
