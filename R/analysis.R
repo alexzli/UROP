@@ -8,7 +8,7 @@ library(reshape2)
 #' @param RCTD an RCTD object that has cell types stored in results.
 #' @return a plot of the spatial locations of cell types
 #' @export
-plot.cell.types <- function(RCTD) {
+plot_cell_types <- function(RCTD) {
 	plot_all_cell_types(RCTD@results$results_df, RCTD@originalSpatialRNA@coords, RCTD@cell_type_info$renorm[[2]], '..')
 }
 
@@ -47,7 +47,7 @@ cell.confusion.mat <- function(RCTD_ref, RCTD_pred, cell_types = NULL, verbose =
 #' @param verbose (default FALSE) whether to display number of reference, predicted, and common singlets.
 #' @return a table containing cell type assignments.
 #' @export
-cell.table <- function(RCTD_truth, RCTD_pred, verbose = FALSE) {
+singlet_table <- function(RCTD_truth, RCTD_pred, verbose = FALSE) {
   truth_singlet <- RCTD_truth@results$results_df
   truth_singlet <- truth_singlet[truth_singlet$spot_class == 'singlet',]
   pred_singlet <- RCTD_pred@results$results_df

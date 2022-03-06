@@ -6,8 +6,8 @@ library(spacexr)
 library(cluster)
 
 
-run.unsupervised <- function(puck, max_cores = 4, resolution = 1, silhouette_cutoff = 0, SCT = T, gene_list = NULL, info_type = 'mean', fit_genes = 'de') {
-  assignments <- gen.clusters(puck, resolution = resolution, silhouette_cutoff = silhouette_cutoff, SCT = SCT)
+run.unsupervised <- function(puck, max_cores = 4, max_iter = 50, resolution = 1, doublet_mode = 'doublet', use_silhouette = F, silhouette_cutoff = 0, SCT = T, gene_list = NULL, info_type = 'mean', fit_genes = 'de') {
+  assignments <- gen.clusters(puck, resolution = resolution, use_silhouette = use_silhouette, silhouette_cutoff = silhouette_cutoff, SCT = SCT)
   if (info_type == 'mean') {
     cell_type_info <- cell_type_info_from_assignments(puck, assignments)
   } else if (info_type == 'de') {
@@ -16,7 +16,7 @@ run.unsupervised <- function(puck, max_cores = 4, resolution = 1, silhouette_cut
     stop(paste0("run.unsupervised: info_type=",info_type," is not a valid choice. Please set info_type=mean or de."))
   }
   myRCTD <- create.RCTD.noref(puck, max_cores = max_cores, cell_type_info = cell_type_info, gene_list_reg = gene_list)
-  return(iter.optim(myRCTD, fit_genes = fit_genes))
+  return(iter.optim(myRCTD, doublet_mode = doublet_mode, fit_genes = fit_genes, max_iter = max_iter))
 }
 
 
@@ -34,16 +34,14 @@ run.semisupervised <- function(RCTD, max_cores = 4, gene_list = NULL) {
 }
 
 
-iter.optim <- function(RCTD, fit_genes = 'de', cell_types = NULL, CELL_MIN_INSTANCE = 0, max_iter = 50, convergence_thresh = 0.999) {
-	RCTD@config$RCTDmode <- 'doublet'
+iter.optim <- function(RCTD, doublet_mode = 'doublet', fit_genes = 'de', cell_types = NULL, max_iter = 50, convergence_thresh = 0.999) {
+	RCTD@config$RCTDmode <- doublet_mode
 	RCTD <- choose_sigma_c(RCTD)
 	message('run.iter.optim: assigning initial cell types')
-	RCTD <- fitPixels(RCTD, doublet_mode = 'doublet')
+	RCTD <- fitPixels(RCTD, doublet_mode = doublet_mode)
 	barcodes <- intersect(names(RCTD@spatialRNA@nUMI), colnames(RCTD@spatialRNA@counts))
-	if (is.null(cell_types)) {
-		cell_type_count <- aggregate_cell_types(RCTD, barcodes, doublet_mode = T)
-		cell_types <- names(which(cell_type_count >= CELL_MIN_INSTANCE))
-	}
+	if (is.null(cell_types))
+		cell_types <- RCTD@cell_type_info$info[[2]]
 	RCTD_list = list()
 	RCTD_list[[1]] <- RCTD
 	X <- as.matrix(rep(1, length(barcodes)))
@@ -51,30 +49,44 @@ iter.optim <- function(RCTD, fit_genes = 'de', cell_types = NULL, CELL_MIN_INSTA
 	for (i in 1:max_iter) {
 		message(paste('iter.optim: running iteration', i))
 		message('fitting gene expression profiles')
-		if (fit_genes == 'de') {
-  		RCTD <- run.CSIDE(RCTD, X, barcodes, cell_types, cell_type_threshold = 0, gene_threshold = 0, sigma_gene = F, test_genes_sig = F, params_to_test = 1)
+		if (doublet_mode == 'doublet') {
+			if (fit_genes == 'de') {
+	  		RCTD <- run.CSIDE(RCTD, X, barcodes, cell_types, cell_type_threshold = 0, gene_threshold = 0, sigma_gene = F, test_genes_sig = F, params_to_test = 1)
+	  		info <- list(as.data.frame(exp(RCTD@de_results$gene_fits$mean_val)), cell_types, length(cell_types))
+			} else if (fit_genes == 'mean') {
+			  pred_singlets <- RCTD@results$results_df[RCTD@results$results_df$spot_class == 'singlet',]
+			  cell_type_list <- pred_singlets$first_type
+			  names(cell_type_list) <- rownames(pred_singlets)
+			  info <- get_cell_type_info(RCTD@originalSpatialRNA@counts[,rownames(pred_singlets)], cell_type_list, RCTD@originalSpatialRNA@nUMI[rownames(pred_singlets)])
+			} else if (fit_genes == 'singlet de') {
+				RCTD@results$results_df[RCTD@results$results_df$spot_class != 'singlet',]$spot_class <- 'reject'
+				RCTD <- run.CSIDE(RCTD, X, barcodes, cell_types, cell_type_threshold = 0, gene_threshold = 0, sigma_gene = F, test_genes_sig = F, params_to_test = 1)
+	  		info <- list(as.data.frame(exp(RCTD@de_results$gene_fits$mean_val)), cell_types, length(cell_types))
+			} else {
+			  stop(paste0("iter.optim: fit_genes=",fit_genes," is not a valid choice. Please set fit_genes=mean, de, or singlet de."))
+			}
+		}
+		if (doublet_mode == 'full') {
+			RCTD <- run.CSIDE(RCTD, X, barcodes, cell_types, doublet_mode = F, cell_type_threshold = 0, gene_threshold = 0, sigma_gene = F, test_genes_sig = F, params_to_test = 1)
   		info <- list(as.data.frame(exp(RCTD@de_results$gene_fits$mean_val)), cell_types, length(cell_types))
-		} else if (fit_genes == 'mean') {
-		  pred_singlets <- RCTD@results$results_df[RCTD@results$results_df$spot_class == 'singlet',]
-		  cell_type_list <- pred_singlets$first_type
-		  names(cell_type_list) <- rownames(pred_singlets)
-		  info <- get_cell_type_info(RCTD@originalSpatialRNA@counts[,rownames(pred_singlets)], cell_type_list, RCTD@originalSpatialRNA@nUMI[rownames(pred_singlets)])
-		} else if (fit_genes == 'singlet de') {
-			RCTD@results$results_df[RCTD@results$results_df$spot_class != 'singlet',]$spot_class <- 'reject'
-			RCTD <- run.CSIDE(RCTD, X, barcodes, cell_types, cell_type_threshold = 0, gene_threshold = 0, sigma_gene = F, test_genes_sig = F, params_to_test = 1)
-  		info <- list(as.data.frame(exp(RCTD@de_results$gene_fits$mean_val)), cell_types, length(cell_types))
-		} else {
-		  stop(paste0("iter.optim: fit_genes=",fit_genes," is not a valid choice. Please set fit_genes=mean, de, or singlet de."))
 		}
 		cell_type_info <- list(info = info, renorm = info)
 		RCTD@cell_type_info <- cell_type_info
 		message('fitting cell types')
-		RCTD <- fitPixels(RCTD)
+		RCTD <- fitPixels(RCTD, doublet_mode = doublet_mode)
 		RCTD_list[[i+1]] <- RCTD
-		accuracy = assignment_accuracy(RCTD_list[[i]], RCTD_list[[i+1]])
-		message(paste('pixel assignment accuracy:', accuracy))
-		if (accuracy > convergence_thresh)
-			break
+		if (doublet_mode == 'doublet') {
+			accuracy <- assignment_accuracy(RCTD_list[[i]], RCTD_list[[i+1]])
+			message(paste('pixel assignment accuracy:', accuracy))
+			if (accuracy > convergence_thresh)
+				break
+		}
+		if (doublet_mode == 'full') {
+			mse <- weights_mse(RCTD_list[[i]], RCTD_list[[i+1]])
+			message(paste('pixel weights mse:', mse))
+			if (mse < 1e-6)
+				break
+		}
 	}
 	return(RCTD_list)
 }
@@ -92,6 +104,13 @@ assignment_accuracy <- function(RCTD1, RCTD2) {
   results2[results2$spot_class == 'reject',]$second_type <- placeholder
   common <- as.data.frame(results1 == results2)
   dim(common[common$spot_class & common$first_type & common$second_type,])[1] / dim(results1)[1]
+}
+
+
+weights_mse <- function(RCTD1, RCTD2) {
+	weights1 <- RCTD1@results$weights
+	weights2 <- RCTD2@results$weights
+	return(sum((log(weights1) - log(weights2)) ** 2) / length(weights1))
 }
 
 
@@ -142,7 +161,7 @@ de_info_from_assignments <- function(puck, assignments, gene_threshold = 0) {
 }
 
 
-gen.clusters <- function(puck, resolution = 1, SCT = T, silhouette_cutoff = 0) {
+gen.clusters <- function(puck, resolution = 1, SCT = T, use_silhouette = F, silhouette_cutoff = 0) {
 	slide.seq <- CreateSeuratObject(counts = puck@counts, assay = "Spatial")
 	if (SCT) {
 		slide.seq <- SCTransform(slide.seq, assay = "Spatial", verbose = F)
@@ -158,20 +177,24 @@ gen.clusters <- function(puck, resolution = 1, SCT = T, silhouette_cutoff = 0) {
 	assignments <- slide.seq@meta.data['seurat_clusters']
 	colnames(assignments) <- 'cell_types'
 	message(paste0("cell types: ",paste(levels(assignments$cell_types), collapse = ', ')))
-	# assign silhouette scores, not yet compatible with de_info_from_assignments
-	distance_matrix <- dist(Embeddings(slide.seq[['pca']])[, 1:30])
-  clusters <- slide.seq@meta.data$seurat_clusters
-  silhouette <- silhouette(as.numeric(clusters), dist = distance_matrix)
-  assignments$silhouette <- silhouette[, 3]
-  #assignments <- assignments[assignments$silhouette > 0, ]
-  cutoffs <- c()
-  for (cell_type in levels(assignments$cell_types)) {
-    cutoff <- quantile(assignments[assignments$cell_types == cell_type,]$silhouette, probs=silhouette_cutoff)
-    cutoffs <- append(cutoffs, cutoff)
-  }
-  names(cutoffs) <- levels(assignments$cell_types)
-  assignments <- assignments[assignments$silhouette > cutoffs[assignments$cell_types],]
-  return(assignments)
+	if (use_silhouette) {
+		# assign silhouette scores, not yet compatible with de_info_from_assignments
+		distance_matrix <- dist(Embeddings(slide.seq[['pca']])[, 1:30])
+	  clusters <- slide.seq@meta.data$seurat_clusters
+	  silhouette <- silhouette(as.numeric(clusters), dist = distance_matrix)
+	  assignments$silhouette <- silhouette[, 3]
+
+	  #assignments <- assignments[assignments$silhouette > 0, ]
+
+	  cutoffs <- c()
+	  for (cell_type in levels(assignments$cell_types)) {
+	    cutoff <- quantile(assignments[assignments$cell_types == cell_type,]$silhouette, probs=silhouette_cutoff)
+	    cutoffs <- append(cutoffs, cutoff)
+	  }
+	  names(cutoffs) <- levels(assignments$cell_types)
+	  assignments <- assignments[assignments$silhouette > cutoffs[assignments$cell_types],]
+	}
+	return(assignments)
 }
 
 
