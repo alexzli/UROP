@@ -481,7 +481,7 @@ assign.cell.types <- function(RCTD, assignments, weight = 0.9) {
   empty_cell_types = factor(character(N), levels = cell_type_names)
   spot_levels <- c("reject", "singlet", "doublet_certain", "doublet_uncertain")
   results_df <- data.frame(
-    spot_class = factor(character(N), levels=spot_levels),
+    spot_class = factor(character(N), levels = spot_levels),
     first_type = empty_cell_types,
     second_type = empty_cell_types
   )
