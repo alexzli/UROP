@@ -5,7 +5,6 @@ library(Seurat)
 library(spacexr)
 library(cluster)
 
-
 #' Unsupervised assignment of cell types.
 #'
 #' Performs unsupervised cell type assignment and gene expression prediction
@@ -13,6 +12,8 @@ library(cluster)
 #' with a clustering-based initialization.
 #'
 #' @param puck a SpatialRNA object to run prediction on
+#' @param convergence_thresh (default 0.999) similarity threshold for early
+#'   termination
 #' @param max_cores (default 4) maximum number of cores for parallel processing
 #' @param max_iter (default 50) maximum number of optimization iterations
 #' @param resolution (default 1) resolution for initial clustering
@@ -28,7 +29,15 @@ library(cluster)
 #'   generation ('mean' or 'de')
 #' @param fit_genes (default 'de') method of gene expression profile generation
 #'   ('mean', 'de', or 'singlet de')
+#' @param CONFIDENCE_THRESHOLD (default 10) the minimum change in likelihood 
+#'   (compared to other cell types) necessary to determine a cell type identity 
+#'   with confidence
+#' @param DOUBLET_THRESHOLD (default 10) the penalty weigth of predicting a 
+#'   doublet instead of a singlet for a pixel
+#' @param FINAL_THRESHOLD (default 25) the penalty weigth of predicting a 
+#'   doublet instead of a singlet for a pixel applied at the last iteration
 run.unsupervised <- function(puck,
+                             convergence_thresh = 0.995,
                              max_cores = 4,
                              max_iter = 50,
                              resolution = 1,
@@ -38,7 +47,10 @@ run.unsupervised <- function(puck,
                              SCT = T,
                              gene_list = NULL,
                              info_type = 'mean',
-                             fit_genes = 'de') {
+                             fit_genes = 'de',
+                             CONFIDENCE_THRESHOLD = 10,
+                             DOUBLET_THRESHOLD = 10,
+                             FINAL_THRESHOLD = 25) {
   assignments <- gen.clusters(
     puck,
     resolution = resolution,
@@ -60,13 +72,17 @@ run.unsupervised <- function(puck,
     puck,
     max_cores = max_cores,
     cell_type_info = cell_type_info,
-    gene_list_reg = gene_list
+    gene_list_reg = gene_list,
+    CONFIDENCE_THRESHOLD = CONFIDENCE_THRESHOLD,
+    DOUBLET_THRESHOLD = DOUBLET_THRESHOLD
   )
   iter.optim(
     myRCTD,
     doublet_mode = doublet_mode,
     fit_genes = fit_genes,
-    max_iter = max_iter
+    max_iter = max_iter,
+    convergence_thresh = convergence_thresh,
+    FINAL_THRESHOLD = FINAL_THRESHOLD
   )
 }
 
@@ -78,6 +94,8 @@ run.unsupervised <- function(puck,
 #' provided a given initialization.
 #'
 #' @param RCTD a labeled RCTD object to run prediction on
+#' @param convergence_thresh (default 0.999) similarity threshold for early
+#'   termination
 #' @param max_cores (default 4) maximum number of cores for parallel processing
 #' @param max_iter (default 50) maximum number of optimization iterations
 #' @param doublet_mode (default 'doublet') mode to run the prediction
@@ -86,35 +104,45 @@ run.unsupervised <- function(puck,
 #'   the prediction. By default, calculates highly-expressed genes
 #' @param fit_genes (default 'de') method of gene expression profile generation
 #'   ('mean', 'de', or 'singlet de')
+#' @param CONFIDENCE_THRESHOLD (default 10) the minimum change in likelihood 
+#'   (compared to other cell types) necessary to determine a cell type identity 
+#'   with confidence
+#' @param DOUBLET_THRESHOLD (default 10) the penalty weigth of predicting a 
+#'   doublet instead of a singlet for a pixel
+#' @param FINAL_THRESHOLD (default 25) the penalty weigth of predicting a 
+#'   doublet instead of a singlet for a pixel applied at the last iteration
 run.semisupervised <- function(RCTD,
+                               convergence_thresh = 0.995,
                                max_cores = 4, 
                                max_iter = 50,
                                doublet_mode = 'doublet',
                                gene_list = NULL,
-                               fit_genes = 'de') {
-  if (is.null(gene_list)) {
-    gene_threshold = 5e-5
-  } else {
-    RCTD@originalSpatialRNA <- restrict_counts(RCTD@originalSpatialRNA, 
-      gene_list,
-      UMI_thresh = 100, 
-      UMI_max = 20000000
+                               fit_genes = 'de',
+                               CONFIDENCE_THRESHOLD = 10,
+                               DOUBLET_THRESHOLD = 10) {
+  if (!is.null(gene_list)) {
+    RCTD@originalSpatialRNA <- restrict_counts(
+      RCTD@originalSpatialRNA, 
+      gene_list
     )
-    gene_threshold = 0
   }
-  cell_type_info <- fit.gene.expression(RCTD, gene_threshold = gene_threshold)
+  cell_type_info <- fit.gene.expression(RCTD, gene_threshold = 0)
   myRCTD <- create.RCTD.noref(
     RCTD@originalSpatialRNA,
     max_cores = max_cores,
     cell_type_info = cell_type_info, 
     gene_list_reg = gene_list,
-    class_df = RCTD@internal_vars$class_df
+    class_df = RCTD@internal_vars$class_df,
+    CONFIDENCE_THRESHOLD = CONFIDENCE_THRESHOLD,
+    DOUBLET_THRESHOLD = DOUBLET_THRESHOLD
   )
   iter.optim(
     myRCTD,
     doublet_mode = doublet_mode,
     fit_genes = fit_genes,
     max_iter = max_iter,
+    convergence_thresh = convergence_thresh,
+    FINAL_THRESHOLD = FINAL_THRESHOLD
   )
 }
 
@@ -124,7 +152,8 @@ iter.optim <- function(RCTD,
                        fit_genes = 'de',
                        cell_types = NULL, 
                        max_iter = 50,
-                       convergence_thresh = 0.999) {
+                       convergence_thresh = 0.999,
+                       FINAL_THRESHOLD = 25) {
   RCTD@config$RCTDmode <- doublet_mode
   RCTD <- choose_sigma_c(RCTD)
   message('iter.optim: assigning initial cell types')
@@ -134,7 +163,7 @@ iter.optim <- function(RCTD,
     colnames(RCTD@spatialRNA@counts)
   )
   if (is.null(cell_types)) cell_types <- RCTD@cell_type_info$info[[2]]
-  RCTD_prev <- RCTD
+  RCTD_list <- list(RCTD)
   X <- as.matrix(rep(1, length(barcodes)))
   rownames(X) <- barcodes
   for (i in 1:max_iter) {
@@ -218,26 +247,26 @@ iter.optim <- function(RCTD,
     message('fitting cell types')
     RCTD <- fitPixels(RCTD, doublet_mode = doublet_mode)
     if (doublet_mode == 'doublet') {
-      accuracy <- assignment_accuracy(RCTD_prev, RCTD)
+      accuracy <- assignment_accuracy(RCTD_list[[i]], RCTD)
       message(paste('pixel assignment accuracy:', accuracy))
       if (accuracy > convergence_thresh) break
     }
     if (doublet_mode == 'full') {
-      mse <- weights_mse(RCTD_prev, RCTD)
+      mse <- weights_mse(RCTD_list[[i]], RCTD)
       message(paste('pixel weights mse:', mse))
       if (mse < 1e-6) break
     }
-    RCTD_prev <- RCTD
+    RCTD_list[[i + 1]] <- RCTD
   }
   if (doublet_mode == 'doublet') {
     results <- RCTD@results$results_df
     reassign <- rownames(
       results[results$spot_class == 'doublet_certain' & 
-      results$singlet_score - results$min_score < 25, ]
+      results$singlet_score - results$min_score < FINAL_THRESHOLD, ]
     )
     RCTD@results$results_df[reassign, ]$spot_class <- 'singlet'
   }
-  RCTD
+  RCTD_list
 }
 
 
@@ -275,9 +304,13 @@ create.RCTD.noref <- function(spatialRNA,
                               UMI_max = 20000000, 
                               UMI_min_sigma = 300,
                               MAX_MULTI_TYPES = 4,
+                              CONFIDENCE_THRESHOLD = 10,
+                              DOUBLET_CUTOFF = 10,
                               cell_type_info = NULL,
                               gene_list_reg = NULL,
-                              class_df = NULL) {
+                              class_df = NULL,
+                              CONFIDENCE_THRESHOLD = 10,
+                              DOUBLET_THRESHOLD = 10) {
   config <- list(
     gene_cutoff_reg = gene_cutoff_reg,
     fc_cutoff_reg = fc_cutoff_reg,
@@ -293,14 +326,17 @@ create.RCTD.noref <- function(spatialRNA,
     MIN_CHANGE_REG = 0.001,
     UMI_max = UMI_max,
     MIN_OBS = 3,
-    MAX_MULTI_TYPES = MAX_MULTI_TYPES
+    MAX_MULTI_TYPES = MAX_MULTI_TYPES,
+    CONFIDENCE_THRESHOLD = CONFIDENCE_THRESHOLD,
+    DOUBLET_THRESHOLD = DOUBLET_THRESHOLD
   )
   reference <- new(
     "Reference",
     cell_types = factor(),
     counts = as(matrix(), 'dgCMatrix')
   )
-  puck.original = restrict_counts(spatialRNA,
+  puck.original = restrict_counts(
+    spatialRNA,
     rownames(spatialRNA@counts),
     UMI_thresh = config$UMI_min,
     UMI_max = config$UMI_max
@@ -485,8 +521,8 @@ assign.cell.types <- function(RCTD, assignments, weight = 0.9) {
     first_type = empty_cell_types,
     second_type = empty_cell_types
   )
-  for(i in 1:N) {
-    if(i %% 1000 == 0) print(paste("assign.cell.types: finished", i))
+  for (i in 1:N) {
+    if (i %% 1000 == 0) print(paste("assign.cell.types: finished", i))
     barcode <- barcodes[i]
     weights_doublet[i, ] = c(weight, 1 - weight)
     results_df[i, "spot_class"] = "singlet"
