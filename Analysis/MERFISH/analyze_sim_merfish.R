@@ -2,9 +2,12 @@ datadir <- '~/UROP'
 source(file.path(datadir, 'R/algorithm.R'))
 source(file.path(datadir, 'R/analysis.R'))
 
-RCTD_list <- readRDS(file.path(datadir, 'Objects/MERFISH_20um2_10_10.rds'))
+RCTD_list <- readRDS(file.path(datadir, 'Objects/MERFISH_20um2_10_5.rds'))
 RCTDpred <- RCTD_list[[length(RCTD_list)]]
+
 results <- readRDS(file.path(datadir, 'Objects/MERFISH_truth_20um2.rds'))
+
+RCTDpred <- readRDS(file.path(datadir, 'Objects/MERFISH_20um2_10_5.rds'))
 
 # set up results data frames
 pred_results <- RCTDpred@results$results_df
@@ -23,9 +26,9 @@ truth_results$second_type <- second_type
 truth_results <- truth_results[,c('spot_class', 'first_type', 'second_type')]
 
 # reassign doublet/singlet
-reassign <- rownames(pred_results[pred_results$spot_class == 'doublet_certain' & 
-                                    pred_results$singlet_score - pred_results$min_score < 25,])
-pred_results[reassign,]$spot_class <- 'singlet'
+#reassign <- rownames(pred_results[pred_results$spot_class == 'doublet_certain' & 
+#                                    pred_results$singlet_score - pred_results$min_score < 25,])
+#pred_results[reassign,]$spot_class <- 'singlet'
 
 # singlets
 singlet_table <- function(truth_results, pred_results) {
@@ -114,26 +117,24 @@ barplot(doublet_dist, main = 'True Spot Types of Predicted Doublets', xlab = 'Tr
 
 
 # save results
-correct_10_25 <- correct
-total_10_25 <- total
-doublet_10_25 <- doublet_dist
+correct_sil_80 <- correct
+total_sil_80 <- total
+doublet_sil_80 <- doublet_dist
 
-merfish_accuracy <- data.frame(correct_10_10, correct_10_15, correct_10_20, correct_10_25, 
-                                  correct_5_10, correct_5_15, correct_5_20, correct_5_25, 
-                                  total_10_10, total_10_15, total_10_20, total_10_25, 
-                                  total_5_10, total_5_15, total_5_20, total_5_25)
-merfish_doublet <- data.frame(c(doublet_10_10[1:2]), c(doublet_10_15[1:2]), c(doublet_10_20[1:2]), c(doublet_10_25[1:2]),
-                                 c(doublet_5_10[1:2]), c(doublet_5_15[1:2]), c(doublet_5_20[1:2]), c(doublet_5_25[1:2]))
-colnames(merfish_doublet) <- c('10_10','10_15','10_20','10_25','5_10','5_15','5_20','5_25')
+merfish_accuracy <- data.frame(correct_sil_00, correct_sil_20, correct_sil_40, correct_sil_60, correct_sil_80,
+                               total_sil_00, total_sil_20, total_sil_40, total_sil_60, total_sil_80)
+merfish_doublet <- data.frame(c(doublet_sil_00[1:2]), c(doublet_sil_20[1:2]), c(doublet_sil_40[1:2]), c(doublet_sil_60[1:2]),
+                                 c(doublet_sil_80[1:2]))
+colnames(merfish_doublet) <- c('0.00','0.20','0.40','0.60','0.80')
 
-saveRDS(merfish_accuracy,file.path(datadir,'Objects/MERFISH_reassigned_accuracy.rds'))
-saveRDS(merfish_doublet,file.path(datadir,'Objects/MERFISH_reassigned_doublet.rds'))
+saveRDS(merfish_accuracy,file.path(datadir,'Objects/MERFISH_silhouette_accuracy.rds'))
+saveRDS(merfish_doublet,file.path(datadir,'Objects/MERFISH_silhouette_doublet.rds'))
 
 
 # generate plots
 
-full_accuracy <- readRDS(file.path(datadir, 'Objects/MERFISH_full_accuracy.rds'))
-full_doublet <- readRDS(file.path(datadir, 'Objects/MERFISH_full_doublet.rds'))
+full_accuracy <- readRDS(file.path(datadir, 'Objects/MERFISH_silhouette_accuracy.rds'))
+full_doublet <- readRDS(file.path(datadir, 'Objects/MERFISH_silhouette_doublet.rds'))
 full_doublet <- full_doublet[c('doublet_certain','singlet'),]
 rownames(full_doublet) <- c('singlet','doublet')
 
@@ -142,10 +143,11 @@ rownames(full_doublet) <- c('singlet','doublet')
 full_doublet <- data.matrix(full_doublet)
 doublet_data <- melt(full_doublet)
 colnames(doublet_data) <- c('spot_type', 'params', 'count')
+doublet_data$params <- as.character(doublet_data$params)
 ggplot(doublet_data, aes(fill=spot_type, y=count, x=params)) + 
   geom_bar(position="dodge", stat="identity") +
-  xlab('Parameters (QL_score_cutoff, doublet_like_cutoff)') + ylab('Count') +
-  ggtitle('True Spot Types of Predicted Doublets') + labs(fill = 'True Spot Type')
+  xlab('Silhouette Cutoff') + ylab('Count') +
+  ggtitle('True Spot Types of Predicted Doublets') + labs(fill = 'True Spot Type') 
 
 # plot overall accuracy 
 totals <- colSums(full_accuracy)
@@ -164,6 +166,105 @@ ggplot(data=total_data, aes(x=doublet_like_cutoff, y=totals, group=QL_score_cuto
   ggtitle('Accuracy Across Parameters')
 
 
-# doublet proportions
 
 
+
+# FULL MODE COMPARISON
+RCTD_list <- readRDS(file.path(datadir, 'Objects/MERFISH_100um2_fullmode.rds'))
+RCTDpred <- RCTD_list[[100]]
+results <- readRDS(file.path(datadir, 'Objects/MERFISH_truth_100um2.rds'))
+
+pred_results <- RCTDpred@results$weights
+for (i in 1:dim(pred_results)[1]) {
+  pred_results[i,] = pred_results[i,] / rowSums(pred_results)[i]
+}
+truth_results <- results$gtSpotTopics[rownames(pred_results),]
+
+#  analyze majority cell type in each pixel
+pred_maj <- colnames(pred_results)[apply(pred_results, 1, which.max)]
+truth_maj <- colnames(truth_results)[apply(truth_results, 1, which.max)]
+singlet_table <- table(pred_maj, truth_maj) # does not work very well...
+
+# analyze gene expression
+pred_gene <- RCTDpred@cell_type_info$renorm[[1]]
+truth_gene <- t(results$gtCtGenes)
+for (i in 1:dim(pred_gene)[2]) {
+  pred_gene[,i] = pred_gene[,i] / colSums(pred_gene)[i]
+}
+
+pred_gene <- log(pred_gene)
+truth_gene <- log(truth_gene)
+# correlation
+expression <- as.matrix(cbind(pred_gene, truth_gene))
+expression <- expression[rowSums(is.infinite(expression)) == 0, ]
+correlation <- cor(expression)[11:18,1:10]
+data <- melt(correlation ^ 2)
+ggplot(data, aes(factor(Var1), factor(Var2), fill= value)) +
+  geom_tile() +
+  theme_classic() +
+  scale_fill_gradientn(colors = pals::brewer.blues(20)[2:20], limits=c(0,1), name='r^2') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  xlab('Reference Cell Type')+ ylab('Predicted Cell Type')
+# MSE and KL divergence
+ref_expression <- data.matrix(truth_gene)
+pred_expression <- data.matrix(pred_gene)
+gene_list <- intersect(rownames(na.omit(ref_expression[rowSums(is.infinite(ref_expression)) == 0,])), rownames(na.omit(pred_expression[rowSums(is.infinite(pred_expression)) == 0,])))
+ref_expression <- ref_expression[gene_list,]
+pred_expression <- pred_expression[gene_list,]
+ref_cells <- colnames(ref_expression); pred_cells <- colnames(pred_expression)
+mse_mat <- matrix(,nrow = length(ref_cells), ncol = length(pred_cells))
+rownames(mse_mat) <- ref_cells; colnames(mse_mat) <- pred_cells
+kl_mat <- matrix(,nrow = length(ref_cells), ncol = length(pred_cells))
+rownames(kl_mat) <- ref_cells; colnames(kl_mat) <- pred_cells
+for (i in 1:length(ref_cells)) {
+  for (j in 1:length(pred_cells)) {
+    mse_mat[i,j] <- sum((ref_expression[,i] - pred_expression[,j]) ** 2) / length(gene_list)
+    kl_mat[i,j] <- sum((ref_expression[,i] - pred_expression[,j]) * exp(ref_expression[,i])) / length(gene_list)
+  }
+}
+
+majority_assign <- colnames(singlet_table)[apply(singlet_table, 1, function(x) which(x == max(x)))]
+corr_assign <- rownames(correlation)[apply(correlation, 2, function(x) which(x == max(x)))]
+mse_assign <- rownames(mse_mat)[apply(mse_mat, 2, function(x) which(x == min(x)))]
+kl_assign <- rownames(kl_mat)[apply(kl_mat, 2, function(x) which(x == min(x)))]
+majority_assign
+corr_assign
+mse_assign
+kl_assign
+
+# plot puck
+plot_puck_continuous(
+  RCTDpred@originalSpatialRNA,
+  colnames(RCTDpred@originalSpatialRNA@counts),
+  RCTDpred@results$weights[,6],
+  size=5,
+  my_pal = pals::brewer.blues(20)[2:20]
+)
+
+# corelation matrix and heatmap
+cor(cbind(as.matrix(pred_results), as.matrix(truth_results)))[1:0,11:18]
+data <- melt(abs(correlation))
+ggplot(data, aes(factor(Var1), factor(Var2), fill= value)) +
+  geom_tile() +
+  theme_classic() +
+  scale_fill_gradientn(colors = pals::brewer.blues(20)[2:20], limits=c(0,1), name='r^2') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  xlab('Reference Cell Type')+ ylab('Predicted Cell Type')
+
+# scatter plots
+data <- as.data.frame(cbind(pred_results[,1] + pred_results[,2] + pred_results[,3] + pred_results[,4], truth_results[,'Inhibitory']))
+colnames(data) <- c('pred','truth')
+
+my_pal = pals::coolwarm(20)
+p2 <- ggplot(data, aes(x=truth, y=pred, colour="blue")) +
+  geom_point(color=my_pal[1]) +
+  theme_classic() +
+  xlab('True Inhibitory Proportion') +
+  ylab('Predicted Inhibitory Proportion') + 
+  scale_y_continuous(breaks = c(0,0.5,1), limits = c(-.03,1.03)) + 
+  scale_x_continuous(breaks = c(0,0.5,1), limits = c(-.03,1.03)) +
+  theme(legend.position = "none") +
+  geom_abline(slope=1, color = my_pal[20])
+p2
+
+sqrt(sum((pred_results[,1] + pred_results[,2] + pred_results[,3] + pred_results[,4] - truth_results[,'Inhibitory']) ** 2) / length(pred_results[,8]))

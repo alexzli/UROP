@@ -36,6 +36,8 @@ counts_ <- counts_[, !grepl("Blank", colnames(counts_))]
 ## collect the pertinent metadata for the cells in the tissue sections
 annot.table_ <- annot.table_[annot.table_$Animal_ID == 2,
                              c('Centroid_X', 'Centroid_Y', 'Bregma', "Cell_class", "Neuron_cluster_ID")]
+#annot.table_ <- annot.table_[annot.table_$Animal_ID == 1 & annot.table_$Bregma == 0.01,
+#                             c('Centroid_X', 'Centroid_Y', 'Bregma', "Cell_class", "Neuron_cluster_ID")]
 
 ## collapse the Oligodendrocytes and Endothelial cell-types
 annot.table_[grep(pattern = "OD Mature",
@@ -59,6 +61,10 @@ annot.table_$Centroid_Y <- as.numeric(as.character(annot.table_$Centroid_Y))
 ## filter the gene counts matrix to only include the filtered cells
 counts_ <- counts_[rownames(annot.table_),]
 dim(counts_)
+
+## retrieve raw counts
+counts_ <- counts_/apply(counts_, 1, function(x) min(x[x > 0]))
+counts_ <- apply(counts_, c(1,2), as.integer)
 
 library(STdeconvolve)
 
@@ -106,9 +112,102 @@ dim(gtGexpNeuronalCellTypes)
 ## so make sure this is set to the cell-types of interest
 annot.table_$Cell_class <- majorCellTypes
 
+# updated to include nUMI in cellTypeTable
+simulateBregmaSpots <- function (cellCentroidsAndClass, counts, patch_size = 100) {
+  
+  # dictionary hash table
+  h <- hash::hash()
+  
+  data <- cellCentroidsAndClass
+  
+  for (bregma in unique(data$Bregma)) {
+    
+    bregma_key <- as.character(bregma)
+    print(bregma_key)
+    
+    selected_bregma <- data[which(data$Bregma == bregma),]
+    
+    # 1. Get patch edge coordinates:
+    
+    # Sequence of X-coord positions for left edge of each patch:
+    x_edges <- seq(min(selected_bregma$Centroid_X), max(selected_bregma$Centroid_X), patch_size)
+    # drop first and last to avoid any issues with the edges of the whole region
+    inner_x_edges <- x_edges[2:(length(x_edges)-1)]
+    # Sequence of Y-coord positions for bottom edge of each patch:
+    y_edges <- seq(min(selected_bregma$Centroid_Y), max(selected_bregma$Centroid_Y), patch_size)
+    inner_y_edges <- y_edges[2:(length(y_edges)-1)]
+    
+    selected_bregma$patch_id <- character(length(rownames(selected_bregma)))
+    
+    # 2. add patch IDs to bregma cells, for the patch they belong to:
+    
+    for (x in inner_x_edges) {
+      for (y in inner_y_edges) {
+        patch_id <- paste0(as.character(x), "_", as.character(y))
+        patch <- selected_bregma[which( (selected_bregma$Centroid_X > x) &
+                                          (selected_bregma$Centroid_X < x+patch_size) &
+                                          (selected_bregma$Centroid_Y > y) &
+                                          (selected_bregma$Centroid_Y < y+patch_size) ),]
+        
+        if (length(rownames(patch)) > 0) {
+          selected_bregma[rownames(patch),]$patch_id <- patch_id
+        }
+      }
+    }
+    
+    # 3. get table of counts of cell types for each patch in bregma
+    selected_bregma$nUMI <- rowSums(counts[rownames(selected_bregma),])
+    patch_cell_types <- selected_bregma[which(selected_bregma$patch_id != ""),
+                                        c("patch_id", "Cell_class", "nUMI")]
+    patch_cell_types <- as.data.frame(lapply(patch_cell_types, rep, patch_cell_types$nUMI))
+    patch_cell_types <- patch_cell_types[,c("patch_id","Cell_class")]
+    cellTypeTable <- table(patch_cell_types[])
+    
+    # 4. total cell counts in each patch
+    patchTotalCells <- rowSums(cellTypeTable)
+    
+    # 5. counts of unique cell types in each patch
+    cellTypeCount <- c()
+    for (i in seq_len(length(rownames(cellTypeTable)))) {
+      patch_num_cell_types <- length(which(cellTypeTable[i,] != 0))
+      cellTypeCount <- append(cellTypeCount, patch_num_cell_types)
+    }
+    
+    # 6. collapse gene counts for cells in same spot to make simulation
+    patches <- unique(selected_bregma$patch_id[which(!selected_bregma$patch_id == "")])
+    patchGexp <- do.call(rbind, lapply(patches, function(patch){
+      cells <- rownames(selected_bregma[which(selected_bregma$patch_id == patch),])
+      mat <- as.matrix(counts[cells,])
+      if (length(cells) == 1){
+        patch_counts <- as.vector(mat)
+      } else if (length(cells) > 1){
+        patch_counts <- colSums(mat)
+      } else if (length(cells) == 0){
+        cat("WARNING:", bregma, "patch", patch, "had no cells in `counts` to use for simulated gene expression", "\n")
+      }
+      patch_counts
+    }))
+    rownames(patchGexp) <- patches
+    
+    # 7. gene count matrix for individual cells in the bregma
+    # this also includes cells not assigned to patches
+    bregma_cells <- rownames(selected_bregma)
+    cellGexp <- counts[bregma_cells,]
+    
+    # 8. combine data objects and append to hash table
+    h[[bregma_key]] <- list(bregmaFullDf = selected_bregma,
+                            cellTypeTable = cellTypeTable,
+                            patchTotalCells = patchTotalCells,
+                            cellTypeCount = cellTypeCount,
+                            cellGexp = cellGexp,
+                            patchGexp = patchGexp)
+  }
+  return(h)
+}
+
 FN7_hash <- simulateBregmaSpots(annot.table_,
                                 counts = counts_, # gene counts matrix
-                                patch_size = 20) # size of the simulated pixels in um2 (units of the Centroids)
+                                patch_size = 100) # size of the simulated pixels in um2 (units of the Centroids)
 
 # table of number of cell types in each spot for entire FN7
 # spot IDs for all spots in FN7
@@ -201,8 +300,11 @@ simFN7 <- list(sim = sim_N7,
                # classColors = classColors,
                annotDf = annotDf_N7)
 
-saveRDS(simFN7, '../UROP/objects/simFN7_20um2.rds')
-puck <- SpatialRNA(counts = t(as.matrix(sim_N7)), use_fake_coords = T, require_int = F)
+# num cell types per pixel distribution
+table(apply(gtSpotTopics_N7, MARGIN = 1, function(x) length(which(x > 0))))
+
+saveRDS(simFN7, '../UROP/objects/MERFISH_truth_100um2_FULL.rds')
+puck <- SpatialRNA(counts = t(as.matrix(sim_N7)), use_fake_coords = T)
 puck@coords <- cellCounts_N7[,1:2]
-saveRDS(puck, '../UROP/objects/MERFISH_puck_20um2.rds')
+saveRDS(puck, '../UROP/objects/MERFISH_puck_100um2_FULL.rds')
 

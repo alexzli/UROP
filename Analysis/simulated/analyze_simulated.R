@@ -74,7 +74,7 @@ my_pal = pals::coolwarm(20)
 
 p1 <-ggplot2::ggplot(results_df, ggplot2::aes(x=true, y=means, colour = "true")) +
   ggplot2::geom_line() +
-  ggplot2::geom_point()+
+  ggplot2::geom_point() +
   ggplot2::geom_line(ggplot2::aes(y=true,colour = "means")) +
   ggplot2::geom_errorbar(ggplot2::aes(ymin=means-1.96*stdevs, ymax=means+1.96*stdevs), width=.05,
                          position=ggplot2::position_dodge(0.05)) + theme_classic() + xlab('True Bergmann Proportion')+ ylab('Predicted Bergmann Proportion')+ scale_color_manual(values=c(my_pal[20], my_pal[1]),labels = c("",""), name = "") + scale_y_continuous(breaks = c(0,0.5,1), limits = c(-.03,1.03))+ scale_x_continuous(breaks = c(0,0.5,1), limits = c(-.03,1.03))+ theme(legend.position = "none")

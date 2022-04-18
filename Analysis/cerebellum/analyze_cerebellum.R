@@ -8,7 +8,7 @@ RCTDpred <- RCTD_list[[length(RCTD_list)]]
 ## INITIAL DATA ANALYSIS
 
 # Spatially plot predicted cells
-plot.cell.types(RCTDpred)
+plot_cell_types(RCTDpred)
 # Gene expression MSE compare consecutive (testing convergence)
 for (i in 1:(length(RCTD_list)-1)) {
   print(gene.mse(RCTD_list[[i]], RCTD_list[[i+1]]))
@@ -23,7 +23,7 @@ for (i in 1:length(RCTD_list)) {
 }
 
 # compare spot types
-RCTD_list <- readRDS(file.path(datadir, 'Objects/cerebellum_10_25.rds'))
+RCTD_list <- readRDS(file.path(datadir, 'Objects/cerebellum_10_10.rds'))
 RCTDpred <- RCTD_list[[length(RCTD_list)]]
 pred_results <- RCTDpred@results$results_df
 truth_results <- RCTD_truth@results$results_df
@@ -38,7 +38,7 @@ confmat <- confusionMatrix(pred_results[common, 'spot_class'], truth_results[com
 
 # Accuracy metric for singlets and doublets
 
-RCTD_list <- readRDS(file.path(datadir, 'Objects/cerebellum_5_10.rds'))
+RCTD_list <- readRDS(file.path(datadir, 'Objects/cerebellum_10_10.rds'))
 RCTD_pred <- RCTD_list[[length(RCTD_list)]]
 RCTD_truth <- readRDS(file.path(datadir, 'data/RCTD_cerebellum_slideseq.rds'))
 pred_results <- RCTD_pred@results$results_df
@@ -49,9 +49,9 @@ truth_results$first_type <- gsub('MLI1|MLI2', 'MLI', truth_results$first_type)
 truth_results$second_type <- gsub('MLI1|MLI2', 'MLI', truth_results$second_type)
 
 # reassign doublet_like_cutoff
-reassign <- rownames(pred_results[pred_results$spot_class == 'doublet_certain' & 
-                                  pred_results$singlet_score - pred_results$min_score < 25,])
-pred_results[reassign,]$spot_class <- 'singlet'
+#reassign <- rownames(pred_results[pred_results$spot_class == 'doublet_certain' & 
+#                                  pred_results$singlet_score - pred_results$min_score < 25,])
+#pred_results[reassign,]$spot_class <- 'singlet'
 
 # assign clusters to ground truth cell types
 singlet_table <- function(truth_results, pred_results) {
@@ -214,3 +214,59 @@ ggplot(data=purk_data, aes(x=doublet_like_cutoff, y=value, group=QL_score_cutoff
   geom_point() +
   ylab('Marker Gene Expression Log Difference') +
   ggtitle('Purkinje Marker Gene Expression')
+
+# FIND MARKER GENES
+get_marker_data <- function(cell_type_names, cell_type_means, gene_list) {
+  marker_means = cell_type_means[gene_list,]
+  marker_norm = marker_means / rowSums(marker_means)
+  marker_data = as.data.frame(cell_type_names[max.col(marker_means)])
+  marker_data$max_epr <- apply(cell_type_means[gene_list,],1,max)
+  colnames(marker_data) = c("cell_type",'max_epr')
+  rownames(marker_data) = gene_list
+  marker_data$log_fc <- 0
+  epsilon <- 1e-9
+  for(cell_type in unique(marker_data$cell_type)) {
+    cur_genes <- gene_list[marker_data$cell_type == cell_type]
+    other_mean = rowMeans(cell_type_means[cur_genes,cell_type_names != cell_type])
+    marker_data$log_fc[marker_data$cell_type == cell_type] <- log(epsilon + cell_type_means[cur_genes,cell_type]) - log(epsilon + other_mean)
+  }
+  return(marker_data)
+}
+
+RCTD_pred <- readRDS(file.path(datadir, 'Objects/cerebellum_10_10.rds'))[[17]]
+RCTD_truth <- readRDS(file.path(datadir, 'data/RCTD_cerebellum_slideseq.rds'))
+pred_results <- RCTD_pred@results$results_df
+truth_results <- RCTD_truth@results$results_df
+# merge MLI1 and MLI2 cell types
+truth_results$first_type <- gsub('MLI1|MLI2', 'MLI', truth_results$first_type)
+truth_results$second_type <- gsub('MLI1|MLI2', 'MLI', truth_results$second_type)
+# assign clusters to ground truth cell types
+singlet_table <- function(truth_results, pred_results) {
+  truth_singlet <- truth_results[truth_results$spot_class == 'singlet',]
+  pred_singlet <- pred_results[pred_results$spot_class == 'singlet',]
+  common_barcode <- intersect(row.names(truth_singlet), row.names(pred_singlet))
+  truth_singlet <- truth_singlet[common_barcode,]
+  pred_singlet <- pred_singlet[common_barcode,]
+  truth_types = unlist(list(truth_singlet[,'first_type']))
+  pred_types = unlist(list(pred_singlet[,'first_type']))
+  return(table(truth_types, pred_types))
+}
+mytable <- singlet_table(truth_results, pred_results)
+cluster_assignments <- rownames(mytable)[apply(mytable, 2, function(x) which(x == max(x)))]
+names(cluster_assignments) <- colnames(mytable)
+
+myRCTD <- readRDS(file.path(datadir, 'Objects/cerebellum_10_10.rds'))[[17]]
+cur_cell_types <- c("2","0","4","3","5") # set to cell types
+puck <- myRCTD@spatialRNA
+cell_type_info_restr = myRCTD@cell_type_info$info
+cell_type_info_restr[[1]] = cell_type_info_restr[[1]][,cur_cell_types]
+cell_type_info_restr[[2]] = cur_cell_types; cell_type_info_restr[[3]] = length(cur_cell_types)
+de_genes <- get_de_genes(cell_type_info_restr, puck, fc_thresh = 3, expr_thresh = .0001, MIN_OBS = 3)
+marker_data_de = get_marker_data(cell_type_info_restr[[2]], cell_type_info_restr[[1]], de_genes)
+
+berg_pred <- rownames(marker_data_de)[marker_data_de$cell_type == "2"]
+purk_pred <- rownames(marker_data_de)[marker_data_de$cell_type == "5"]
+
+marker_data_truth <- readRDS(file.path(datadir, 'Data/marker_data_de_standard.RDS'))
+berg_truth <- rownames(marker_data_truth)[marker_data_truth$cell_type == "Bergmann"]
+purk_truth <- rownames(marker_data_truth)[marker_data_truth$cell_type == "Purkinje"]

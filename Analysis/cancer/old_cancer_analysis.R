@@ -4,7 +4,7 @@ source('../UROP/R/clustering.R')
 source('../UROP/R/analysis.R')
 
 # Initial code for analyzing cancer dataset. Updated code can be found in run_cancer.R,
-# and updated analysis can eb found in analyze_cancer.R
+# and updated analysis can be found in analyze_cancer.R
 
 
 ## --------------------------------- DATA PREPROCESSING ---------------------------------

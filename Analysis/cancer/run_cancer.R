@@ -1,5 +1,5 @@
-datadir <- '/UROP/'
-source(file.path(datadir, '/R/algorithm.R'))
+datadir <- '~/UROP/'
+source(file.path(datadir, 'R/algorithm.R'))
 
 
 # LOAD DATA
@@ -27,6 +27,20 @@ myRCTD@internal_vars$class_df <- class_df
 myRCTD@config$max_cores <- 4
 
 
+# FULL GENE LIST
+counts <- read.csv(file = file.path(datadir, '/Data/MappedDGEForR.csv'))
+rownames(counts) <- counts$GENE; counts$GENE <- NULL
+nUMI <- colSums(counts)
+myRCTD <- readRDS(file.path(datadir, '/Data/myRCTD_201014_03.rds'))
+coords <- myRCTD@originalSpatialRNA@coords
+puck <- SpatialRNA(coords, counts, nUMI)
+saveRDS(puck, file.path(datadir, '/Data/cancer_puck.rds'))
+
+
+saveRDS(myRCTD, file.path(datadir, '/Objects/cancer_RCTD_initial.rds'))
+
+
 # RUN ALGORITHM
-RCTD_list <- run.semisupervised(myRCTD, gene_list = NULL)
-saveRDS(RCTD_list, file.path(datadir, '/Objects/cancer_results_newgenes.rds'))
+myRCTD <- readRDS(file.path(datadir, 'Objects/cancer_RCTD_initial.rds'))
+RCTD_list <- run.semisupervised(myRCTD)
+saveRDS(RCTD_list, file.path(datadir, '/Objects/cancer_RCTD_final.rds'))

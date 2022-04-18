@@ -2,7 +2,7 @@ datadir <- '~/UROP'
 source(file.path(datadir, 'R/algorithm.R'))
 source(file.path(datadir, 'R/analysis.R'))
 
-RCTD_list <- readRDS(file.path(datadir, 'Objects/MERFISH_15_25_6res.rds'))
+RCTD_list <- readRDS(file.path(datadir, 'Objects/MERFISH_15_25_SCT.rds'))
 RCTDpred <- RCTD_list[[length(RCTD_list)]]
 
 ## INITIAL DATA ANALYSIS
@@ -49,6 +49,12 @@ assignment.accuracy(mytable)
 assignment.accuracy.plot(mytable)
 mytable
 
+for (i in 1:length(RCTD_list)) {
+  mytable <- singlet_table(RCTD_list[[i]])
+  print(assignment.accuracy(mytable))
+}
+
+
 # excitatory and inhibitory neurons across iterations
 for (i in 1:length(RCTD_list)) {
   mytable <- singlet_table(RCTD_list[[i]])
@@ -56,13 +62,19 @@ for (i in 1:length(RCTD_list)) {
   print(mytable[c('Excitatory', 'Inhibitory'),])
 }
 
-# compare with clustering results
-assignments <- gen.clusters(myRCTD@originalSpatialRNA, resolution = 0.6)
-RCTDcluster <- create.RCTD.noref(myRCTD@originalSpatialRNA)
-RCTDpred <- assign.cell.types(RCTDcluster, assignments)
+# analyze singlet scores
+high_scores <- RCTDpred@results$results_df[RCTDpred@results$results_df$singlet_score - RCTDpred@results$results_df$min_score > 40,]
+truth[rownames(high_scores),] # ground truth cell types of spots with very high singlet - min score
 
-mytable <- singlet_table(RCTDpred)
-assignment.accuracy(mytable)
-assignment.accuracy.plot(mytable)
-mytable
+
+# compare with clustering results
+myRCTD <- readRDS(file.path(datadir, '/Data/postRCTD_spacexr.rds'))
+assignments <- gen.clusters(myRCTD@originalSpatialRNA, resolution = 0.15, silhouette_cutoff = 0)
+RCTDcluster <- create.RCTD.noref(myRCTD@originalSpatialRNA)
+RCTDpred2 <- assign.cell.types(RCTDcluster, assignments)
+
+mytable2 <- singlet_table(RCTDpred2)
+assignment.accuracy(mytable2)
+assignment.accuracy.plot(mytable2)
+mytable2
 

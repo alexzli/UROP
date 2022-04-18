@@ -1,7 +1,7 @@
 datadir <- '~/UROP'
 source(file.path(datadir, '/R/analysis.R'))
 
-RCTD_list <- readRDS(file.path(datadir, 'Objects/cerebellum_5_15.rds'))
+RCTD_list <- readRDS(file.path(datadir, 'Objects/cerebellum_10_10.rds'))
 RCTD_pred <- RCTD_list[[length(RCTD_list)]]
 RCTD_truth <- readRDS(file.path(datadir, 'data/RCTD_cerebellum_slideseq.rds'))
 pred_results <- RCTD_pred@results$results_df
