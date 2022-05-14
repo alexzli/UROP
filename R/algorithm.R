@@ -48,6 +48,8 @@ run.unsupervised <- function(puck,
                              gene_list = NULL,
                              info_type = 'mean',
                              fit_genes = 'de',
+                             gene_cutoff_reg = 0.0002,
+                             fc_cutoff_reg = 0.75,
                              CONFIDENCE_THRESHOLD = 10,
                              DOUBLET_THRESHOLD = 10,
                              FINAL_THRESHOLD = 25) {
@@ -71,6 +73,8 @@ run.unsupervised <- function(puck,
   myRCTD <- create.RCTD.noref(
     puck,
     max_cores = max_cores,
+    gene_cutoff_reg = gene_cutoff_reg,
+    fc_cutoff_reg = fc_cutoff_reg,
     cell_type_info = cell_type_info,
     gene_list_reg = gene_list,
     CONFIDENCE_THRESHOLD = CONFIDENCE_THRESHOLD,
@@ -118,8 +122,11 @@ run.semisupervised <- function(RCTD,
                                doublet_mode = 'doublet',
                                gene_list = NULL,
                                fit_genes = 'de',
+                               gene_cutoff_reg = 0.0002,
+                               fc_cutoff_reg = 0.75,
                                CONFIDENCE_THRESHOLD = 10,
-                               DOUBLET_THRESHOLD = 10) {
+                               DOUBLET_THRESHOLD = 10,
+                               FINAL_THRESHOLD = 25) {
   if (!is.null(gene_list)) {
     RCTD@originalSpatialRNA <- restrict_counts(
       RCTD@originalSpatialRNA, 
@@ -130,6 +137,8 @@ run.semisupervised <- function(RCTD,
   myRCTD <- create.RCTD.noref(
     RCTD@originalSpatialRNA,
     max_cores = max_cores,
+    gene_cutoff_reg = gene_cutoff_reg,
+    fc_cutoff_reg = fc_cutoff_reg,
     cell_type_info = cell_type_info, 
     gene_list_reg = gene_list,
     class_df = RCTD@internal_vars$class_df,
@@ -152,7 +161,7 @@ iter.optim <- function(RCTD,
                        fit_genes = 'de',
                        cell_types = NULL, 
                        max_iter = 50,
-                       convergence_thresh = 0.999,
+                       convergence_thresh = 0.995,
                        FINAL_THRESHOLD = 25) {
   RCTD@config$RCTDmode <- doublet_mode
   RCTD <- choose_sigma_c(RCTD)
@@ -249,12 +258,18 @@ iter.optim <- function(RCTD,
     if (doublet_mode == 'doublet') {
       accuracy <- assignment_accuracy(RCTD_list[[i]], RCTD)
       message(paste('pixel assignment accuracy:', accuracy))
-      if (accuracy > convergence_thresh) break
+      if (accuracy > convergence_thresh) {
+        RCTD_list[[i + 1]] <- RCTD
+        break
+      }
     }
     if (doublet_mode == 'full') {
-      mse <- weights_mse(RCTD_list[[i]], RCTD)
-      message(paste('pixel weights mse:', mse))
-      if (mse < 1e-6) break
+      mae <- weights_mae(RCTD_list[[i]], RCTD)
+      message(paste('pixel weights mae:', mae))
+      if (mae < 1e-6) {
+        RCTD_list[[i + 1]] <- RCTD
+        break
+      }
     }
     RCTD_list[[i + 1]] <- RCTD
   }
@@ -274,12 +289,18 @@ assignment_accuracy <- function(RCTD1, RCTD2) {
   results1 <- RCTD1@results$results_df[, 1:3]
   results2 <- RCTD2@results$results_df[, 1:3]
   placeholder <- levels(results1$first_type)[1]
-  results1[results1$spot_class == 'singlet', ]$second_type <- placeholder
-  results1[results1$spot_class == 'reject', ]$first_type <- placeholder
-  results1[results1$spot_class == 'reject', ]$second_type <- placeholder
-  results2[results2$spot_class == 'singlet', ]$second_type <- placeholder
-  results2[results2$spot_class == 'reject', ]$first_type <- placeholder
-  results2[results2$spot_class == 'reject', ]$second_type <- placeholder
+  if (length(results1[results1$spot_class == 'singlet', ]$second_type) > 0)
+    results1[results1$spot_class == 'singlet', ]$second_type <- placeholder
+  if (length(results1[results1$spot_class == 'reject', ]$first_type) > 0)
+    results1[results1$spot_class == 'reject', ]$first_type <- placeholder
+  if (length(results1[results1$spot_class == 'reject', ]$second_type) > 0)
+    results1[results1$spot_class == 'reject', ]$second_type <- placeholder
+  if (length(results2[results2$spot_class == 'singlet', ]$second_type) > 0)
+    results2[results2$spot_class == 'singlet', ]$second_type <- placeholder
+  if (length(results2[results2$spot_class == 'reject', ]$first_type) > 0)
+    results2[results2$spot_class == 'reject', ]$first_type <- placeholder
+  if (length(results2[results2$spot_class == 'reject', ]$second_type) > 0)
+    results2[results2$spot_class == 'reject', ]$second_type <- placeholder
   common <- as.data.frame(results1 == results2)
   correct <- dim(
     common[common$spot_class &
@@ -296,6 +317,20 @@ weights_mse <- function(RCTD1, RCTD2) {
 }
 
 
+weights_div <- function(RCTD1, RCTD2) {
+  weights1 <- RCTD1@results$weights
+  weights2 <- RCTD2@results$weights
+  sum((log(weights1) - log(weights2)) * weights1) / dim(weights1)[1]
+}
+
+
+weights_mae <- function(RCTD1, RCTD2) {
+  weights1 <- RCTD1@results$weights
+  weights2 <- RCTD2@results$weights
+  sum(abs(weights1 - weights2)) / length(weights1)
+}
+
+
 create.RCTD.noref <- function(spatialRNA,
                               max_cores = 4,
                               gene_cutoff_reg = 0.0002,
@@ -305,12 +340,10 @@ create.RCTD.noref <- function(spatialRNA,
                               UMI_min_sigma = 300,
                               MAX_MULTI_TYPES = 4,
                               CONFIDENCE_THRESHOLD = 10,
-                              DOUBLET_CUTOFF = 10,
+                              DOUBLET_THRESHOLD = 10,
                               cell_type_info = NULL,
                               gene_list_reg = NULL,
-                              class_df = NULL,
-                              CONFIDENCE_THRESHOLD = 10,
-                              DOUBLET_THRESHOLD = 10) {
+                              class_df = NULL) {
   config <- list(
     gene_cutoff_reg = gene_cutoff_reg,
     fc_cutoff_reg = fc_cutoff_reg,
