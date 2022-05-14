@@ -1,0 +1,111 @@
+---
+title: "Semi-supervised Learning on Spatial Tumor Data"
+author: "Alex Li"
+date: "May 10th, 2022"
+output: html_document
+---
+
+```{r setup}
+datadir <- '~/UROP'
+source(file.path(datadir, 'R/algorithm.R'))
+source(file.path(datadir, 'R/analysis.R'))
+```
+
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = T, warning = F, message = F)
+```
+
+## Introduction
+
+We now demonstrate a semi-supervised approach using a cancer-containing spatial dataset that has initial cell type labels. The initial cancer-cell labels were determined using known marker genes, while the other labels were generated with RCTD. 
+
+## Data preprocessing
+
+First, we add the cancer cell labels to the raw RCTD object and augment the original SpatialRNA object with the full list of genes.
+
+```{r preprocess, eval=F}
+myRCTD <- readRDS(file.path(datadir, '/Data/myRCTD_201014_03.rds'))
+results <- read.csv(file = file.path(datadir, '/Data/results_processed_slideseq_data_2020-12-12_Puck_201014_03_2020-12-12_Puck_201014_03_cell_types.csv'))
+
+cancer_results <- results[results$HRS_location == TRUE,]
+results <- myRCTD@results$results_df
+results$first_type = factor(results$first_type, levels=append(levels(results$first_type), 'Cancer_cells'))
+results$second_type = factor(results$second_type, levels=append(levels(results$second_type), 'Cancer_cells'))
+for (barcode in cancer_results$barcodes) {
+  results[barcode, 'spot_class'] = 'singlet'
+  results[barcode,'first_type'] = 'Cancer_cells'
+}
+myRCTD@results$results_df <- results
+myRCTD@cell_type_info$info[[2]] <- append(myRCTD@cell_type_info$info[[2]], 'Cancer_cells')
+myRCTD@cell_type_info$renorm[[2]] <- append(myRCTD@cell_type_info$renorm[[2]], 'Cancer_cells')
+myRCTD@cell_type_info$info[[3]] <- myRCTD@cell_type_info$info[[3]] + 1
+myRCTD@cell_type_info$renorm[[3]] <- myRCTD@cell_type_info$renorm[[3]] + 1
+class_df <- myRCTD@internal_vars$class_df
+class_df['Cancer_cells', 'class'] = 'Cancer_cells'
+myRCTD@internal_vars$class_df <- class_df
+myRCTD@config$max_cores <- 4
+
+counts <- read.csv(file = file.path(datadir, '/Data/MappedDGEForR.csv'))
+rownames(counts) <- counts$GENE; counts$GENE <- NULL
+nUMI <- colSums(counts)
+coords <- myRCTD@originalSpatialRNA@coords
+puck <- SpatialRNA(coords, counts, nUMI)
+myRCTD@originalSpatialRNA <- puck
+saveRDS(puck, file.path(datadir, '/Data/cancer_puck.rds'))
+saveRDS(myRCTD, file.path(datadir, '/Objects/cancer_RCTD_initial.rds'))
+```
+
+## Running semisupervised learning
+
+We now run the semisupervised learning algorithm with the updated gene list and the new labels.
+
+```{r semisupervised, eval=F}
+myRCTD <- readRDS(file.path(datadir, 'Objects/cancer_RCTD_initial.rds'))
+RCTD_list <- run.semisupervised(myRCTD, convergence_thresh = 0.995)
+saveRDS(RCTD_list, file.path(datadir, '/Objects/final/cancer_RCTD_final.rds'))
+```
+
+## Plotting cell types
+
+We can plot the cell types spatially before and after the learning algorithm to compare the assignments.
+
+```{r plot}
+RCTDinit <- readRDS(file.path(datadir, 'Objects/cancer_RCTD_initial.rds'))
+RCTDlist <- readRDS(file.path(datadir, 'Objects/final/cancer_RCTD_final.rds'))
+RCTDpred <- RCTDlist[[length(RCTDlist)]]
+plot_all_cell_types(RCTDinit@results$results_df, RCTDinit@originalSpatialRNA@coords, RCTDinit@cell_type_info$renorm[[2]], '..')
+plot_all_cell_types(RCTDpred@results$results_df, RCTDpred@originalSpatialRNA@coords, RCTDpred@cell_type_info$renorm[[2]], '..')
+```
+
+## Marker genes
+
+We can also find marker genes for the new cancer cell type.
+
+```{r marker, message = T}
+get_marker_data <- function(cell_type_names, cell_type_means, gene_list) {
+  marker_means = cell_type_means[gene_list,]
+  marker_norm = marker_means / rowSums(marker_means)
+  marker_data = as.data.frame(cell_type_names[max.col(marker_means)])
+  marker_data$max_epr <- apply(cell_type_means[gene_list,],1,max)
+  colnames(marker_data) = c("cell_type",'max_epr')
+  rownames(marker_data) = gene_list
+  marker_data$log_fc <- 0
+  epsilon <- 1e-9
+  for(cell_type in unique(marker_data$cell_type)) {
+    cur_genes <- gene_list[marker_data$cell_type == cell_type]
+    other_mean = rowMeans(cell_type_means[cur_genes,cell_type_names != cell_type])
+    marker_data$log_fc[marker_data$cell_type == cell_type] <- log(epsilon + cell_type_means[cur_genes,cell_type]) - log(epsilon + other_mean)
+  }
+  return(marker_data)
+}
+cur_cell_types <- c('CD4_T_cells', 'CD8_T_cells', 'Monocytes_macrophages', 'Cancer_cells')
+puck <- RCTDpred@spatialRNA
+cell_type_info_restr = RCTDpred@cell_type_info$info
+cell_type_info_restr[[1]] = cell_type_info_restr[[1]][,cur_cell_types]
+cell_type_info_restr[[2]] = cur_cell_types; cell_type_info_restr[[3]] = length(cur_cell_types)
+de_genes <- get_de_genes(cell_type_info_restr, puck, fc_thresh = 1.5, expr_thresh = .0001, MIN_OBS = 3)
+marker_data_de = get_marker_data(cell_type_info_restr[[2]], cell_type_info_restr[[1]], de_genes)
+marker_data_de[marker_data_de$cell_type == 'Cancer_cells', ]
+```
+

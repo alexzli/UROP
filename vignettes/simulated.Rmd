@@ -1,0 +1,244 @@
+---
+title: "Unsupervised Learning on Simulated Spatial Data"
+author: "Alex Li"
+date: "May 10th, 2022"
+output: html_document
+---
+
+```{r setup}
+datadir <- '~/UROP'
+source(file.path(datadir, 'R/algorithm.R'))
+source(file.path(datadir, 'R/analysis.R'))
+```
+
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = T, warning = F, message = F)
+```
+
+## Introduction
+
+As a proof-of-concept for our unsupervised model, we run the algorithm on a simulated cerebellum dataset. The dataset is generated using a snRNA reference dataset, where every pair of cell types exhibits a uniform distribution of mixing. Only two cell types are mixed at a time, and the default doublet mode of the algorithm is tested.
+
+## Generating the simulated dataset
+
+First, we generate the simulated dataset using the reference.
+
+```{r gen_simulated, eval=F}
+sub_sample_cell <- function(gene_list, raw.data, cell_index, UMI_sample) {
+  sub_sample = sample(rep(rownames(raw.data),raw.data[,cell_index]),UMI_sample,replace=FALSE)
+  sub_sample = table(sub_sample)[as.character(gene_list)]
+  names(sub_sample) = gene_list
+  sub_sample[is.na(sub_sample)] <- 0
+  return(sub_sample)
+}
+
+generate_sim_puck <- function(common_cell_types, gene_list, ref, trials = 30, UMI_tot = 1000) {
+  n_cell_types = length(common_cell_types)
+  n_conditions = 13
+  boundary = ceiling(n_conditions / 2)
+  N_samples = (n_cell_types * trials * n_conditions * (n_cell_types - 1))/2 # total number of samples
+  first_UMI = numeric(N_samples); first_type = character(N_samples); second_type = character(N_samples)
+  # first_UMI, first_type, second_type are all vectors of length N_samples. first_type, second_type store cell types,
+  # first_UMI stores UMI counts
+  UMI_tot = UMI_tot; UMI_step = UMI_tot / (n_conditions-1)
+  UMI_tot = round(UMI_step * (n_conditions-1)); UMI1_vec = round(0:(n_conditions-1)*UMI_step)
+  # above are the UMI amounts
+  beads = Matrix(0, nrow = length(gene_list), ncol = N_samples)
+  rownames(beads) = gene_list; colnames(beads) = 1:N_samples
+  # beads that are filled as the algorithm runs, only thing that has to change is N_samples
+  firstbeads = Matrix(0, nrow = length(gene_list), ncol = N_samples)
+  rownames(firstbeads) = gene_list; colnames(firstbeads) = 1:N_samples
+  secbeads = Matrix(0, nrow = length(gene_list), ncol = N_samples)
+  rownames(secbeads) = gene_list; colnames(secbeads) = 1:N_samples
+  # firstbeads and secbeads add together to create beads
+  first_index_list <- numeric(N_samples); second_index_list <- numeric(N_samples);
+  names(first_index_list) <- 1:N_samples; names(second_index_list) <- 1:N_samples;
+  index = 1
+  nUMI = ref@nUMI
+  results <- matrix(ncol = 4)
+  for(i in 1:(n_cell_types-1)) {
+    print(paste("Progress",i))
+    for(j in (i+1):n_cell_types) {
+      print(paste("ProgressSecond",j))
+      type1 = common_cell_types[i]; type2 = common_cell_types[j]
+      for (condition in 1:n_conditions) {
+        UMI1 = UMI1_vec[condition]; UMI2 = UMI_tot - UMI1
+        for(t in 1:trials) {
+          first_UMI[index] = UMI1; first_type[index] = type1; second_type[index] = type2
+          # sets UMI values and cell types
+          firstInd = sample(intersect(which(ref@cell_types == type1) , which(nUMI > 1000)),1)
+          secondInd = sample(intersect(which(ref@cell_types == type2) , which(nUMI > 1000)),1)
+          # samples a reference barcode index for each cell type
+          first_index_list[index] <- firstInd; second_index_list[index] <- secondInd
+          # stores the barcode indices in the lists
+          firstbeads[,index] = as.vector(sub_sample_cell(gene_list, ref@counts, firstInd, UMI1))
+          secbeads[,index] = as.vector(sub_sample_cell(gene_list, ref@counts, secondInd, UMI2))
+          beads[,index] = firstbeads[,index] + secbeads[,index]
+          # samples gene counts using the UMI amounts and the barcode index from above
+          results <- rbind(results, c(type1, type2, UMI1, UMI2))
+          index = index + 1
+        }
+      }
+    }
+  }
+  results <- results[-1,]
+  results <- as.data.frame(results)
+  return(list(beads = beads, results = results))
+}
+
+reference <- readRDS(file.path(datadir, '/data/reference_RCTD_vec.rds'))
+cell_types <- c('Astrocytes', 'Bergmann', 'Fibroblast', 'Golgi', 'Granule', 'MLI1', 'MLI2', 'Oligodendrocytes', 'Polydendrocytes', 'Purkinje')
+beads_list <- generate_sim_puck(cell_types, rownames(reference@counts), reference, trials=30)
+beads <- beads_list$beads; results <- beads_list$results
+puck <- SpatialRNA(NULL, beads, use_fake_coords = T)
+saveRDS(puck, file.path(datadir, '/objects/sim_puck.rds'))
+saveRDS(results, file.path(datadir, '/objects/sim_puck_truth.rds'))
+```
+
+## Running unsupervised learning
+
+Now we run unsupervised learning on the simulated puck.
+
+```{r unsupervised, eval=F}
+puck <- readRDS(file.path(datadir, 'objects/sim_puck.rds'))
+RCTD_list <- run.unsupervised(puck, resolution = 0.12, convergence_thresh = 0.999)
+saveRDS(RCTD_list, file.path(datadir, 'objects/final/sim_puck_final.rds'))
+```
+
+## Analyzing singlets
+
+We load the data and look at the final iteration as our predicted results. We can begin by analyzing its singlet assignment accuracy.
+
+```{r singlets}
+results <- readRDS(file.path(datadir, 'objects/sim_puck_truth.rds'))
+colnames(results) <- c('type1','type2','UMI1','UMI2')
+RCTD_list <- readRDS(file.path(datadir, 'objects/final/sim_puck_final.rds'))
+RCTDpred <- RCTD_list[[length(RCTD_list)]]
+pred_results <- RCTDpred@results$results_df
+
+# analyze singlets
+truth_types = c()
+pred_types = c()
+for (i in 1:dim(results)[1]) {
+  if (pred_results[i,'spot_class'] == 'singlet' & strtoi(results[i,'UMI1']) > strtoi(results[i,'UMI2'])) {
+    truth_types <- append(truth_types, results[i,'type1'])
+    pred_types <- append(pred_types, RCTDpred@results$results_df[i, 'first_type'])
+  } else if (pred_results[i,'spot_class'] == 'singlet' & strtoi(results[i,'UMI2']) > strtoi(results[i,'UMI1'])) {
+    truth_types <- append(truth_types, results[i,'type2'])
+    pred_types <- append(pred_types, RCTDpred@results$results_df[i, 'first_type'])
+  }
+}
+mytable <- table(truth_types, pred_types)
+mytable
+assignment.accuracy.plot(mytable)
+```
+
+## Analyzing Astrocyte-Oligodendrocyte doublets
+
+Next, we will analyze doublets. Since Astrocyte and Oligodendrocyte cells co-localize in the cerebellum, we will analyze these doublets.
+
+```{r doublets}
+doublet_truth <- results[results$type1 == 'Astrocytes' & results$type2 == 'Oligodendrocytes',]
+doublet_pred <- pred_results[rownames(doublet_truth),]
+
+deconvolved_doublets <- doublet_pred[(doublet_pred$spot_class == 'doublet_certain') &
+                 ((doublet_pred$first_type == '0' & doublet_pred$second_type == '7') | (doublet_pred$first_type == '7' & doublet_pred$second_type == '0')),]
+first_IDs <- rownames(deconvolved_doublets[deconvolved_doublets$first_type == '7',])
+second_IDs <- rownames(deconvolved_doublets[deconvolved_doublets$second_type == '7',])
+
+first_truth <- strtoi(doublet_truth[first_IDs, 'UMI1']) / 1000
+second_truth <- strtoi(doublet_truth[second_IDs, 'UMI1']) / 1000
+first_pred <- RCTDpred@results$weights_doublet[first_IDs, 'first_type']
+second_pred <- RCTDpred@results$weights_doublet[second_IDs, 'second_type']
+
+true_prop <- c(first_truth, second_truth)
+pred_prop <- c(first_pred, second_pred)
+```
+
+We can calculate the mean squared error of spot type proportions for these doublets.
+
+```{r mse}
+sqrt(sum((true_prop - pred_prop)^2) / length(true_prop))
+```
+
+We can also plot the predicted Astrocyte proportion as a function of the true Astrocyte proportion.
+
+```{r proportion_plot}
+prop_df <- data.frame(factor(true_prop), pred_prop)
+true_proportions <- levels(prop_df$factor.true_prop.)
+means <- c()
+stdevs <- c()
+for (prop in true_proportions) {
+  means <- append(means, mean(prop_df[prop_df$factor.true_prop. == prop,]$pred_prop))
+  stdevs <- append(stdevs, sd(prop_df[prop_df$factor.true_prop. == prop,]$pred_prop))
+}
+library(ggplot2)
+results_df <- data.frame(as.numeric(true_proportions), means, stdevs)
+colnames(results_df) <- c('true', 'means', 'stdev')
+my_pal = pals::coolwarm(20)
+
+p1 <-ggplot2::ggplot(results_df, ggplot2::aes(x=true, y=means, colour = "true")) +
+  ggplot2::geom_line() +
+  ggplot2::geom_point() +
+  ggplot2::geom_line(ggplot2::aes(y=true,colour = "means")) +
+  ggplot2::geom_errorbar(ggplot2::aes(ymin=means-1.96*stdevs, ymax=means+1.96*stdevs), width=.05,
+                         position=ggplot2::position_dodge(0.05)) + theme_classic() + xlab('True Asrtocyte Proportion')+ ylab('Predicted Astrocyte Proportion')+ scale_color_manual(values=c(my_pal[20], my_pal[1]),labels = c("",""), name = "") + scale_y_continuous(breaks = c(0,0.5,1), limits = c(-.03,1.03))+ scale_x_continuous(breaks = c(0,0.5,1), limits = c(-.03,1.03))+ theme(legend.position = "none")
+p1
+```
+
+Next, we can analyze the rate at which pixels are being classified as doublets by the unsupervised algorithm. 
+
+```{r doublet_rate}
+doublets_pred <- pred_results[pred_results$spot_class == 'doublet_certain',] #results filtered for confident doublets
+doublets_true <- results[rownames(doublets_pred),] #real proportions of predicted doublets
+results$prop <- factor(strtoi(pmin(results$UMI1, results$UMI2)) / 1000) #real proportinos of all doublets
+doublets_true$prop <- factor(strtoi(pmin(doublets_true$UMI1, doublets_true$UMI2)) / 1000, levels=levels(results$prop))
+doublet_classification_rate <- table(doublets_true$prop) / table(results$prop)
+
+doublet_df <- as.data.frame(doublet_classification_rate)
+doublet_df$std <- sqrt(doublet_classification_rate * (1 - doublet_classification_rate) / table(results$prop))
+colnames(doublet_df) <- c('prop', 'value', 'std')
+doublet_df$prop <- as.numeric(levels(doublet_df$prop))
+
+my_pal = pals::coolwarm(20)
+p2 <- ggplot(doublet_df, aes(prop,value)) + geom_line()  + 
+  geom_errorbar(aes(ymin=value-1.96*std, ymax=value+1.96*std), width=.02,position=position_dodge(.001)) + theme_classic() + 
+  geom_hline(yintercept=0, linetype="dashed", color = "grey", size=0.5) + geom_hline(yintercept=1, linetype="dashed", color = "grey", size=0.5) + xlab("UMI Proportion of Minority Cell Type") + ylab("Doublet Classification Rate") + scale_color_manual(values=c(my_pal[1], my_pal[20]),labels = c("Doublet"), name = "Class") + scale_y_continuous(breaks = c(0,0.5,1), limits = c(0,1))+ scale_x_continuous(breaks = c(0,0.25,0.5), limits = c(-.03,0.53))
+p2
+```
+
+## Analyzing marker genes
+
+We can also analyze how well the unsupervised model predicts gene expression profiles by analyzing marker gene expression. We analyze the expression of known Oligodendrocyte marker genes across all cell types.
+
+```{r marker}
+get_marker_data <- function(cell_type_names, cell_type_means, gene_list) {
+  marker_means = cell_type_means[gene_list,]
+  marker_norm = marker_means / rowSums(marker_means)
+  marker_data = as.data.frame(cell_type_names[max.col(marker_means)])
+  marker_data$max_epr <- apply(cell_type_means[gene_list,],1,max)
+  colnames(marker_data) = c("cell_type",'max_epr')
+  rownames(marker_data) = gene_list
+  marker_data$log_fc <- 0
+  epsilon <- 1e-9
+  for(cell_type in unique(marker_data$cell_type)) {
+    cur_genes <- gene_list[marker_data$cell_type == cell_type]
+    other_mean = rowMeans(cell_type_means[cur_genes,cell_type_names != cell_type])
+    marker_data$log_fc[marker_data$cell_type == cell_type] <- log(epsilon + cell_type_means[cur_genes,cell_type]) - log(epsilon + other_mean)
+  }
+  return(marker_data)
+}
+
+cluster_assignments <- rownames(mytable)[apply(mytable, 2, function(x) which(x == max(x)))]
+names(cluster_assignments) <- colnames(mytable)
+
+marker_data_truth <- readRDS(file.path(datadir, 'Data/marker_data_de_standard.RDS'))
+cell_type_info <- RCTDpred@cell_type_info$info[[1]]
+colnames(cell_type_info) <- cluster_assignments
+markers <- rownames(marker_data_truth[marker_data_truth$cell_type == 'Oligodendrocytes',])
+normalized_info <- apply(cell_type_info[intersect(rownames(cell_type_info), markers), ], MARGIN = 1, FUN = function(x) x/max(x))
+
+heatmap(normalized_info, Colv = NA, Rowv = NA, scale="column")
+```
+

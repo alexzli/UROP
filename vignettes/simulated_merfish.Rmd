@@ -1,0 +1,390 @@
+---
+title: "Unsupervised Learning of Simulated MERFISH Data"
+author: "Alex Li"
+date: "May 11th, 2022"
+output: html_document
+---
+
+```{r setup}
+datadir <- '~/UROP'
+source(file.path(datadir, 'R/algorithm.R'))
+source(file.path(datadir, 'R/analysis.R'))
+library(ggpubr)
+```
+
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = T, warning = F, message = F)
+```
+
+## Introduction
+
+We analyze our model's performance on simulated spatial datasets of varying pixel resolutions This enables us to evaluate the model's performance on predicting proportions in a more realistic setting and lets us demonstrate the model's full mode. The simulated pucks were generated using the procedure outlined by [STdeconvolve](https://jef.works/STdeconvolve/process_mpoa_data.html) on MERFISH data from Moffit et al. 2018.
+
+## Ground truth data
+
+```{r ground_truth}
+truth <- readRDS(file.path(datadir, 'Objects/MERFISH_truth_20um2.rds'))
+my_table = truth$annotDf
+my_table$Cell_class <- factor(my_table$Cell_class)
+n_levels = length(levels(my_table$Cell_class))
+my_pal = pals::kelly(n_levels+1)[2:(n_levels+1)]
+pres = unique(as.integer(my_table$Cell_class))
+pres = pres[order(pres)]
+if(n_levels > 21)
+  my_pal = pals::polychrome(n_levels)
+plot <- ggplot2::ggplot(my_table, ggplot2::aes(x=Centroid_X, y=Centroid_Y)) + ggplot2::geom_point(ggplot2::aes(size = .15, shape=19,color=Cell_class)) +
+  ggplot2::scale_color_manual(values = my_pal[pres])+ ggplot2::scale_shape_identity() + ggplot2::theme_bw() + ggplot2::scale_size_identity()
+plot
+```
+
+
+## Unsupervised learning on 20um2 resolution
+
+```{r unsupervised_doublet, eval=F}
+puck <- readRDS(file.path(datadir, '/Objects/MERFISH_puck_20um2.rds'))
+gene_list <- puck@counts@Dimnames[[1]]
+RCTD_list <- run.unsupervised(
+  puck,
+  resolution = 0.15,
+  gene_list = gene_list,
+  convergence_thresh = 0.999
+)
+saveRDS(RCTD_list, file.path(datadir, 'Objects/final/MERFISH_20um2_final.rds'))
+```
+
+### Data preprocessing
+
+For the purposes of the analysis, ground truth pixels with a minority UMI proportion of at least 0.2 were considered doublets.
+
+```{r preprocessing_doublet}
+RCTD_list <- readRDS(file.path(datadir, 'Objects/final/MERFISH_20um2_final.rds'))
+RCTDpred <- RCTD_list[[length(RCTD_list)]]
+
+pred_results <- RCTDpred@results$results_df
+truth_results <- as.data.frame(truth$gtSpotTopics[rownames(pred_results),])
+
+doublet_certain <- apply(truth_results, MARGIN = 1, function(x) length(which(x >= 0.2)) == 2)
+singlet <- apply(truth_results, MARGIN = 1, function(x) max(x) > 0.8)
+first_type <- apply(truth_results, MARGIN = 1, function(x) names(which(x == sort(x, decreasing = TRUE)[1]))[1])
+second_type <- apply(truth_results, MARGIN = 1, function(x) names(which(x == sort(x, decreasing = TRUE)[2]))[1])
+
+truth_results$spot_class <- 'reject'
+truth_results[doublet_certain,]$spot_class <- 'doublet_certain'
+truth_results[singlet,]$spot_class <- 'singlet'
+truth_results$first_type <- first_type
+truth_results$second_type <- second_type
+truth_results <- truth_results[,c('spot_class', 'first_type', 'second_type')]
+```
+
+### Spatially plot cell types
+
+```{r plot_doublet}
+plot_all_cell_types <- function(results_df, coords, cell_type_names, resultsdir, size=0.15) {
+  barcodes = rownames(results_df[results_df$spot_class != "reject" & results_df$first_type %in% cell_type_names,])
+  my_table = coords[barcodes,]
+  my_table$class = results_df[barcodes,]$first_type
+  n_levels = length(levels(my_table$class))
+  my_pal = pals::kelly(n_levels+1)[2:(n_levels+1)]
+  pres = unique(as.integer(my_table$class))
+  pres = pres[order(pres)]
+  if(n_levels > 21)
+    my_pal = pals::polychrome(n_levels)
+  if(n_levels > 36)
+    stop("Plotting currently supports at most 36 cell types as colors")
+  plot <- ggplot2::ggplot(my_table, ggplot2::aes(x=x, y=y)) + ggplot2::geom_point(ggplot2::aes(size = size, shape=19,color=class)) +
+    ggplot2::scale_color_manual(values = my_pal[pres])+ ggplot2::scale_shape_identity() + ggplot2::theme_bw() + ggplot2::scale_size_identity()
+  pdf(file.path(resultsdir,"all_cell_types.pdf"))
+  invisible(print(plot))
+  dev.off()
+  return(plot)
+}
+plot_all_cell_types(RCTDpred@results$results_df, RCTDpred@originalSpatialRNA@coords, RCTDpred@cell_type_info$renorm[[2]], '..', size=0.6)
+```
+
+
+### Cell type assignments
+
+We can begin by looking at singlet assignment, since at this resolution, most pixels will only contain one cell type.
+
+```{r singlet}
+singlet_table <- function(truth_results, pred_results) {
+  truth_singlet <- truth_results[truth_results$spot_class == 'singlet',]
+  pred_singlet <- pred_results[pred_results$spot_class == 'singlet',]
+  common_barcode <- intersect(row.names(truth_singlet), row.names(pred_singlet))
+  truth_singlet <- truth_singlet[common_barcode,]
+  pred_singlet <- pred_singlet[common_barcode,]
+  truth_types = unlist(list(truth_singlet[,'first_type']))
+  pred_types = unlist(list(pred_singlet[,'first_type']))
+  return(table(truth_types, pred_types))
+}
+mytable <- singlet_table(truth_results, pred_results)
+mytable
+```
+
+### Visualizing progress across iterations
+
+We can visualize how the cell type assignments change by plotting each iteration of cell type assignments into tSNE embeddings.
+
+```{r fig.height = 16, fig.width = 12}
+RCTD_list <- readRDS(file.path(datadir, 'Objects/final/MERFISH_20um2_final.rds'))
+puck <- readRDS(file.path(datadir, '/Objects/MERFISH_puck_20um2.rds'))
+
+results_df <- RCTD_list[[length(RCTD_list)]]@results$results_df
+barcodes <- rownames(results_df[results_df$spot_class != 'reject', ])
+assignments <- results_df[results_df$spot_class != 'reject', ]$first_type
+names(assignments) <- barcodes
+
+slide.seq <- CreateSeuratObject(counts = puck@counts, assay = "Spatial")
+slide.seq <- SCTransform(slide.seq, assay = "Spatial", verbose = F)
+slide.seq <- RunPCA(slide.seq, assay = "SCT")
+slide.seq <- RunUMAP(slide.seq, dims = 1:30)
+slide.seq <- RunTSNE(slide.seq, dims = 1:30)
+slide.seq <- FindNeighbors(slide.seq, dims = 1:30)
+slide.seq.clusters <- FindClusters(slide.seq, resolution = 0.15, verbose = F)
+
+plots = list()
+plots[[1]] <- DimPlot(slide.seq.clusters, reduction = "tsne", label = F)
+for (i in 1:length(RCTD_list)) {
+  results_df <- RCTD_list[[i]]@results$results_df
+  barcodes <- rownames(results_df[results_df$spot_class != 'reject', ])
+  assignments <- results_df[results_df$spot_class != 'reject', ]$first_type
+  names(assignments) <- barcodes
+  slide.seq.clusters@active.ident <- assignments
+  plots[[i+1]] <- DimPlot(slide.seq.clusters, reduction = "tsne", label = F)
+}
+ggarrange(plots[[1]], plots[[4]], plots[[7]], plots[[10]], plots[[13]], plots[[16]], plots[[19]], plots[[22]], plots[[25]], nrow = 3, ncol = 3)
+```
+
+## Unsupervised learning on 50um2 resolution
+
+```{r unsupervised_full, eval=F}
+puck <- readRDS(file.path(datadir, '/Objects/MERFISH_puck_50um2.rds'))
+gene_list <- puck@counts@Dimnames[[1]]
+RCTD_list <- run.unsupervised(
+  puck,
+  doublet_mode = 'full',
+  resolution = 0.6,
+  gene_list = gene_list,
+  max_iter = 1000
+)
+saveRDS(RCTD_list, file.path(datadir, 'Objects/final/MERFISH_50um2_FULL_final.rds'))
+```
+
+### Data preprocessing
+
+The result proportions have to be normalized to sum up to one.
+
+```{r preprocessing_full}
+RCTD_list <- readRDS(file.path(datadir, 'Objects/final/MERFISH_50um2_FULL_final.rds'))
+RCTDpred <- RCTD_list[[length(RCTD_list)]]
+truth <- readRDS(file.path(datadir, 'Objects/MERFISH_truth_50um2.rds'))
+
+pred_results <- RCTDpred@results$weights
+for (i in 1:dim(pred_results)[1]) {
+  pred_results[i,] = pred_results[i,] / rowSums(pred_results)[i]
+}
+truth_results <- truth$gtSpotTopics[rownames(pred_results),]
+```
+
+### Compare to ground truth
+
+#### Compare gene expression
+
+We make a heatmap of gene expression correlation between the ground truth and predicted gene expression profiles.
+
+```{r}
+pred_gene <- RCTDpred@cell_type_info$renorm[[1]]
+truth_gene <- t(truth$gtCtGenes)
+gene_correlation <- cor(pred_gene, truth_gene)
+heatmap(gene_correlation)
+```
+
+#### Compare cell types
+
+We can assign predicted cell types to ground truth cell types by generating a heatmap of proportion correlation. The assignments are boxed.
+
+```{r}
+true_types <- c('Pericytes', 'Microglia', 'Ependymal', 'OD Immature', 'Endothelial', 'OD Mature', 'Astrocyte', 'Excitatory', 'Inhibitory')
+pred_types <- c('7', '3', '1', '6', '5', '4', '8', '2', '0')
+correlation_matrix <- cor(truth_results, data.matrix(pred_results))
+data <- melt(correlation_matrix)
+data$diag = FALSE
+data[data$Var1 == 'Ependymal' & data$Var2 == '7', ]$diag = TRUE
+data[data$Var1 == 'OD Immature' & data$Var2 == '3', ]$diag = TRUE
+data[data$Var1 == 'Endothelial' & data$Var2 == '1', ]$diag = TRUE
+data[data$Var1 == 'OD Mature' & data$Var2 == '6', ]$diag = TRUE
+data[data$Var1 == 'Astrocyte' & data$Var2 == '5', ]$diag = TRUE
+data[data$Var1 == 'Excitatory' & data$Var2 %in% c('4','8'), ]$diag = TRUE
+data[data$Var1 == 'Inhibitory' & data$Var2 %in% c('2','0'), ]$diag = TRUE
+data$diag[!data$diag] <- NA
+
+ggplot(data, aes(factor(Var1, levels=true_types), factor(Var2, levels=pred_types), fill= value)) +
+						   geom_tile() +
+						   theme_classic() +
+						   scale_fill_gradientn(colors = pals::brewer.rdbu(20)[2:20], limits=c(-1,1), name='Correlation') +
+						   theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+						   xlab('True Cell Type')+ ylab('Predicted Cell Type') + 
+               geom_tile(data = data[!is.na(data$diag), ], aes(color = diag), size = 0.7) +
+               scale_color_manual(guide = FALSE, values = c('TRUE' = "#D55E00"))
+```
+
+### Compare with STdeconvolve
+
+We first run STdeconvolve on the dataset.
+
+```{r results='hide', message=FALSE}
+library(STdeconvolve)
+puck <- readRDS(file.path(datadir, '/Objects/MERFISH_puck_50um2.rds'))
+cd <- puck@counts
+ldas <- fitLDA(t(cd), Ks = 9)
+optLDA <- optimalModel(models = ldas, opt = "min")
+results <- getBetaTheta(optLDA, perc.filt = 0.05, betaScale = 1000)
+deconProp <- results$theta
+deconGexp <- results$beta
+```
+
+Then we can compare to the ground truth.
+
+#### Gene expression
+
+```{r}
+pred_gene <- t(deconGexp)
+truth_gene <- t(truth$gtCtGenes)
+gene_correlation <- cor(pred_gene, truth_gene)
+heatmap(gene_correlation)
+```
+
+#### Cell proportions
+
+```{r}
+true_types <- c('Pericytes', 'Microglia', 'Ependymal', 'OD Immature', 'Endothelial', 'OD Mature', 'Astrocyte', 'Excitatory', 'Inhibitory')
+pred_types <- c('3', '9', '6', '5', '1', '8', '7', '2', '4')
+decon_results <- deconProp[rownames(truth_results), ]
+correlation_matrix <- cor(truth_results, decon_results)
+data <- melt(correlation_matrix)
+data$diag = FALSE
+data[data$Var1 == 'Pericytes' & data$Var2 == '3', ]$diag = TRUE
+data[data$Var1 == 'OD Immature' & data$Var2 == '9', ]$diag = TRUE
+data[data$Var1 == 'Endothelial' & data$Var2 == '6', ]$diag = TRUE
+data[data$Var1 == 'OD Mature' & data$Var2 == '5', ]$diag = TRUE
+data[data$Var1 == 'Astrocyte' & data$Var2 == '1', ]$diag = TRUE
+data[data$Var1 == 'Excitatory' & data$Var2 %in% c('7','8'), ]$diag = TRUE
+data[data$Var1 == 'Inhibitory' & data$Var2 %in% c('2','4'), ]$diag = TRUE
+data$diag[!data$diag] <- NA
+
+ggplot(data, aes(factor(Var1, levels = true_types), factor(Var2, levels = pred_types), fill= value)) +
+						   geom_tile() +
+						   theme_classic() +
+						   scale_fill_gradientn(colors = pals::brewer.rdbu(20)[2:20], limits=c(-1,1), name='Correlation') +
+						   theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+						   xlab('True Cell Type')+ ylab('Predicted Cell Type') + 
+               geom_tile(data = data[!is.na(data$diag), ], aes(color = diag), size = 0.7) +
+               scale_color_manual(guide = FALSE, values = c('TRUE' = "#D55E00"))
+```
+
+We can compare the pixel proportion RMSE between the two methods.
+
+```{r}
+unsupervised_rmse <- as.data.frame(sqrt((
+  (pred_results[, '7'] - truth_results[, 'Ependymal']) ^ 2 + 
+  (pred_results[, '3'] - truth_results[, 'OD Immature']) ^ 2 + 
+  (pred_results[, '1'] - truth_results[, 'Endothelial']) ^ 2 + 
+  (pred_results[, '6'] - truth_results[, 'OD Mature']) ^ 2 + 
+  (pred_results[, '5'] - truth_results[, 'Astrocyte']) ^ 2 + 
+  (pred_results[, '4'] + pred_results[, '8'] - truth_results[, 'Excitatory']) ^ 2 +
+  (pred_results[, '2'] + pred_results[, '0'] - truth_results[, 'Inhibitory']) ^ 2
+) / 7))
+colnames(unsupervised_rmse) <- 'value'
+unsupervised_rmse$method <- 'Unsupervised'
+
+decon_rmse <- as.data.frame(sqrt((
+  (decon_results[, '3'] - truth_results[, 'Pericytes']) ^ 2 + 
+  (decon_results[, '9'] - truth_results[, 'OD Immature']) ^ 2 + 
+  (decon_results[, '6'] - truth_results[, 'Endothelial']) ^ 2 + 
+  (decon_results[, '5'] - truth_results[, 'OD Mature']) ^ 2 + 
+  (decon_results[, '1'] - truth_results[, 'Astrocyte']) ^ 2 + 
+  (decon_results[, '7'] + pred_results[, '8'] - truth_results[, 'Excitatory']) ^ 2 +
+  (decon_results[, '2'] + pred_results[, '4'] - truth_results[, 'Inhibitory']) ^ 2
+) / 7))
+colnames(decon_rmse) <- 'value'
+decon_rmse$method <- 'STdeconvolve'
+
+rmse <- rbind(unsupervised_rmse, decon_rmse)
+
+ggplot(rmse, aes(x=method, y=value)) + 
+    geom_violin(trim=T, alpha=0.1) + geom_boxplot(width=0.1) + theme_minimal() + ylab('RMSE') + xlab('Method')
+```
+
+
+### Spatially plot cell type proportions
+
+#### Mature Oligodendrocytes
+
+```{r}
+plot_puck_continuous(
+  RCTDpred@originalSpatialRNA,
+  colnames(RCTDpred@originalSpatialRNA@counts),
+  RCTDpred@results$weights[,'6'],
+  size=3,
+  my_pal = pals::brewer.blues(20)[2:20]
+)
+```
+
+#### Ependymal
+
+```{r}
+plot_puck_continuous(
+  RCTDpred@originalSpatialRNA,
+  colnames(RCTDpred@originalSpatialRNA@counts),
+  RCTDpred@results$weights[,'7'],
+  size=3,
+  my_pal = pals::brewer.blues(20)[2:20]
+)
+```
+
+### Cell type proportions
+
+#### Mature Oligodendrocytes
+
+```{r}
+data <- as.data.frame(cbind(pred_results[, '6'], truth_results[, 'OD Mature']))
+colnames(data) <- c('pred','truth')
+
+my_pal = pals::coolwarm(20)
+p1 <- ggplot(data, aes(x=truth, y=pred, colour="blue")) +
+  geom_point(color=my_pal[1]) +
+  theme_classic() +
+  xlab('True Mature OD Proportion') +
+  ylab('Predicted Mature OD Proportion') + 
+  scale_y_continuous(breaks = c(0,0.5,1), limits = c(-.03,1.03)) + 
+  scale_x_continuous(breaks = c(0,0.5,1), limits = c(-.03,1.03)) +
+  theme(legend.position = "none") +
+  geom_abline(slope=1, color = my_pal[20])
+p1
+
+# proportion RMSE
+sqrt(sum((pred_results[, '6'] - truth_results[, 'OD Mature']) ** 2) / length(pred_results[,'6']))
+```
+
+#### Ependymal
+
+```{r}
+data <- as.data.frame(cbind(pred_results[, '7'], truth_results[, 'Ependymal']))
+colnames(data) <- c('pred','truth')
+
+my_pal = pals::coolwarm(20)
+p2 <- ggplot(data, aes(x=truth, y=pred, colour="blue")) +
+  geom_point(color=my_pal[1]) +
+  theme_classic() +
+  xlab('True Ependymal Proportion') +
+  ylab('Predicted Ependymal Proportion') + 
+  scale_y_continuous(breaks = c(0,0.5,1), limits = c(-.03,1.03)) + 
+  scale_x_continuous(breaks = c(0,0.5,1), limits = c(-.03,1.03)) +
+  theme(legend.position = "none") +
+  geom_abline(slope=1, color = my_pal[20])
+p2
+
+# proportion RMSE
+sqrt(sum((pred_results[, '7'] - truth_results[, 'Ependymal']) ** 2) / length(pred_results[,'7']))
+```
