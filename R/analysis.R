@@ -2,15 +2,7 @@ library(spacexr)
 library(Matrix)
 library(caret)
 library(reshape2)
-
-#' Plots spatial location of predicted cell types and stores results in UROP/results
-#'
-#' @param RCTD an RCTD object that has cell types stored in results.
-#' @return a plot of the spatial locations of cell types
-#' @export
-plot_cell_types <- function(RCTD) {
-	plot_all_cell_types(RCTD@results$results_df, RCTD@originalSpatialRNA@coords, RCTD@cell_type_info$renorm[[2]], '..')
-}
+library(ggpubr)
 
 #' Compares singlet cell type assignments by generating a confusion matrix using the caret package.
 #' 

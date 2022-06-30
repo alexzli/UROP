@@ -4,6 +4,7 @@ library(Matrix)
 library(Seurat)
 library(spacexr)
 library(cluster)
+library(ggpubr)
 
 #' Unsupervised assignment of cell types.
 #'
@@ -12,9 +13,9 @@ library(cluster)
 #' with a clustering-based initialization.
 #'
 #' @param puck a SpatialRNA object to run prediction on
+#' @param max_cores (default 4) maximum number of cores for parallel processing
 #' @param convergence_thresh (default 0.999) similarity threshold for early
 #'   termination
-#' @param max_cores (default 4) maximum number of cores for parallel processing
 #' @param max_iter (default 50) maximum number of optimization iterations
 #' @param resolution (default 1) resolution for initial clustering
 #' @param doublet_mode (default 'doublet') mode to run the prediction
@@ -32,14 +33,18 @@ library(cluster)
 #' @param CONFIDENCE_THRESHOLD (default 10) the minimum change in likelihood 
 #'   (compared to other cell types) necessary to determine a cell type identity 
 #'   with confidence
+#' @param gene_cutoff_reg (default 0.0002) minimum normalized gene expression
+#'   for genes to be included
+#' @param fc_cutoff_reg (default 0.75) minimum log-fold-change (acorss cell
+#'   types) for genes to be included
 #' @param DOUBLET_THRESHOLD (default 10) the penalty weigth of predicting a 
 #'   doublet instead of a singlet for a pixel
 #' @param FINAL_THRESHOLD (default 25) the penalty weigth of predicting a 
 #'   doublet instead of a singlet for a pixel applied at the last iteration
 run.unsupervised <- function(puck,
-                             convergence_thresh = 0.995,
                              max_cores = 4,
-                             max_iter = 50,
+                             convergence_thresh = NULL,
+                             max_iter = NULL,
                              resolution = 1,
                              doublet_mode = 'doublet',
                              use_silhouette = F,
@@ -98,16 +103,20 @@ run.unsupervised <- function(puck,
 #' provided a given initialization.
 #'
 #' @param RCTD a labeled RCTD object to run prediction on
-#' @param convergence_thresh (default 0.999) similarity threshold for early
-#'   termination
 #' @param max_cores (default 4) maximum number of cores for parallel processing
-#' @param max_iter (default 50) maximum number of optimization iterations
+#' @param convergence_thresh (default 0.999/1e-6) similarity threshold for early
+#'   termination
+#' @param max_iter (default 100/1000) maximum number of optimization iterations
 #' @param doublet_mode (default 'doublet') mode to run the prediction
 #'   ('doublet' or 'full')
 #' @param gene_list (default NULL) option to input a custom gene list to run 
 #'   the prediction. By default, calculates highly-expressed genes
 #' @param fit_genes (default 'de') method of gene expression profile generation
 #'   ('mean', 'de', or 'singlet de')
+#' @param gene_cutoff_reg (default 0.0002) minimum normalized gene expression
+#'   for genes to be included
+#' @param fc_cutoff_reg (default 0.75) minimum log-fold-change (acorss cell
+#'   types) for genes to be included
 #' @param CONFIDENCE_THRESHOLD (default 10) the minimum change in likelihood 
 #'   (compared to other cell types) necessary to determine a cell type identity 
 #'   with confidence
@@ -116,9 +125,9 @@ run.unsupervised <- function(puck,
 #' @param FINAL_THRESHOLD (default 25) the penalty weigth of predicting a 
 #'   doublet instead of a singlet for a pixel applied at the last iteration
 run.semisupervised <- function(RCTD,
-                               convergence_thresh = 0.995,
                                max_cores = 4, 
-                               max_iter = 50,
+                               convergence_thresh = NULL,
+                               max_iter = NULL,
                                doublet_mode = 'doublet',
                                gene_list = NULL,
                                fit_genes = 'de',
@@ -160,9 +169,16 @@ iter.optim <- function(RCTD,
                        doublet_mode = 'doublet',
                        fit_genes = 'de',
                        cell_types = NULL, 
-                       max_iter = 50,
-                       convergence_thresh = 0.995,
+                       max_iter = 100,
+                       convergence_thresh = 0.999,
                        FINAL_THRESHOLD = 25) {
+  if (doublet_mode == 'doublet') {
+    if (is.null(convergence_thresh)) convergence_thresh <- 0.999
+    if (is.null(max_iter)) max_iter <- 100
+  } else if (doublet_mode == 'full') {
+    if (is.null(convergence_thresh)) convergence_thresh <- 1e-6
+    if (is.null(max_iter)) max_iter <- 1000
+  }
   RCTD@config$RCTDmode <- doublet_mode
   RCTD <- choose_sigma_c(RCTD)
   message('iter.optim: assigning initial cell types')
@@ -266,7 +282,7 @@ iter.optim <- function(RCTD,
     if (doublet_mode == 'full') {
       mae <- weights_mae(RCTD_list[[i]], RCTD)
       message(paste('pixel weights mae:', mae))
-      if (mae < 1e-6) {
+      if (mae < convergence_thresh) {
         RCTD_list[[i + 1]] <- RCTD
         break
       }
