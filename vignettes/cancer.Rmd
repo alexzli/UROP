@@ -1,13 +1,13 @@
 ---
-title: "Semi-supervised Learning on Spatial Tumor Data"
+title: "Unsupervised Learning on Spatial Tumor Data"
 author: "Alex Li"
-date: "May 10th, 2022"
+date: "June 14th, 2022"
 output: html_document
 ---
 
 ```{r setup}
 datadir <- '~/UROP'
-source(file.path(datadir, 'R/algorithm.R'))
+source(file.path(datadir, 'R/unsupervised.R'))
 source(file.path(datadir, 'R/analysis.R'))
 ```
 
@@ -18,7 +18,7 @@ knitr::opts_chunk$set(echo = T, warning = F, message = F)
 
 ## Introduction
 
-We now demonstrate a semi-supervised approach using a cancer-containing spatial dataset that has initial cell type labels. The initial cancer-cell labels were determined using known marker genes, while the other labels were generated with RCTD. 
+We now demonstrate our unsupervised model on a cancer-containing spatial dataset that has initial cell type labels. The initial cancer-cell labels were determined using known marker genes, while the other labels were generated with RCTD. 
 
 ## Data preprocessing
 
@@ -32,10 +32,15 @@ cancer_results <- results[results$HRS_location == TRUE,]
 results <- myRCTD@results$results_df
 results$first_type = factor(results$first_type, levels=append(levels(results$first_type), 'Cancer_cells'))
 results$second_type = factor(results$second_type, levels=append(levels(results$second_type), 'Cancer_cells'))
-for (barcode in cancer_results$barcodes) {
-  results[barcode, 'spot_class'] = 'singlet'
-  results[barcode,'first_type'] = 'Cancer_cells'
-}
+results[cancer_results$barcodes, 'spot_class'] <- 'singlet'
+results[cancer_results$barcodes,'first_type'] <- 'Cancer_cells'
+# below modifies cancer cell weight, although this is not actually necessary
+#for (barcode in cancer_results$barcodes) {
+#  if (barcode %in% rownames(myRCTD@results$weights_doublet)) {
+#    myRCTD@results$weights_doublet[barcode,'first_type'] <- 1
+#  }
+#}
+
 myRCTD@results$results_df <- results
 myRCTD@cell_type_info$info[[2]] <- append(myRCTD@cell_type_info$info[[2]], 'Cancer_cells')
 myRCTD@cell_type_info$renorm[[2]] <- append(myRCTD@cell_type_info$renorm[[2]], 'Cancer_cells')
@@ -53,32 +58,72 @@ coords <- myRCTD@originalSpatialRNA@coords
 puck <- SpatialRNA(coords, counts, nUMI)
 myRCTD@originalSpatialRNA <- puck
 saveRDS(puck, file.path(datadir, '/Data/cancer_puck.rds'))
-saveRDS(myRCTD, file.path(datadir, '/Objects/cancer_RCTD_initial.rds'))
+saveRDS(myRCTD, file.path(datadir, '/Objects/vignette_v1/cancer_RCTD_initial.rds'))
 ```
 
 ## Running semisupervised learning
 
-We now run the semisupervised learning algorithm with the updated gene list and the new labels.
+We now run the unsupervised learning algorithm with the updated gene list and the new labels, using CSIDE on the new labels to generate our initialization.
 
-```{r semisupervised, eval=F}
-myRCTD <- readRDS(file.path(datadir, 'Objects/cancer_RCTD_initial.rds'))
-RCTD_list <- run.semisupervised(myRCTD, convergence_thresh = 0.995)
-saveRDS(RCTD_list, file.path(datadir, '/Objects/final/cancer_RCTD_final.rds'))
+```{r unsupervised, eval=F}
+RCTD_init <- readRDS(file.path(datadir, 'Objects/vignette_v1/cancer_RCTD_initial.rds'))
+RCTD_init@config$MIN_CHANGE_DE <- 0.001
+#RCTD_list <- run.de.initialization(RCTD_init, convergence_thresh = 2e-3, max_iter = 50)
+cancer_genes <- readRDS(file.path(datadir, 'Data/HRS_signature.rds'))
+gene_list <- intersect(union(cancer_genes, RCTD_init@internal_vars$gene_list_bulk), rownames(RCTD_init@originalSpatialRNA@counts))
+
+cti <- cell_type_info_from_de(RCTD_init, gene_list = gene_list)
+myRCTD <- create.object(
+  RCTD_init@originalSpatialRNA, 
+  cti, 
+  gene_list_reg = gene_list
+)
+RCTD_list <- run.algorithm(myRCTD)
+
+saveRDS(RCTD_list, file.path(datadir, '/Objects/vignette_v1/cancer_RCTD_new.rds'))
 ```
 
 ## Plotting cell types
 
 We can plot the cell types spatially before and after the learning algorithm to compare the assignments.
 
-```{r plot}
-RCTDinit <- readRDS(file.path(datadir, 'Objects/cancer_RCTD_initial.rds'))
-RCTDlist <- readRDS(file.path(datadir, 'Objects/final/cancer_RCTD_final.rds'))
-RCTDpred <- RCTDlist[[length(RCTDlist)]]
-plot_all_cell_types(RCTDinit@results$results_df, RCTDinit@originalSpatialRNA@coords, RCTDinit@cell_type_info$renorm[[2]], '..')
-plot_all_cell_types(RCTDpred@results$results_df, RCTDpred@originalSpatialRNA@coords, RCTDpred@cell_type_info$renorm[[2]], '..')
+```{r plot_cancer}
+RCTD_init <- readRDS(file.path(datadir, 'Objects/vignette_v1/cancer_RCTD_initial.rds'))
+RCTD_list <- readRDS(file.path(datadir, 'Objects/vignette_v1/cancer_RCTD_new.rds'))
+RCTD_pred <- RCTD_list[[length(RCTD_list)]]
+plot_all_cell_types(RCTD_init@results$results_df, RCTD_init@originalSpatialRNA@coords, RCTD_init@cell_type_info$renorm[[2]], '..')
+plot_all_cell_types(RCTD_pred@results$results_df, RCTD_pred@originalSpatialRNA@coords, RCTD_pred@cell_type_info$renorm[[2]], '..')
 ```
 
-## Marker genes
+## Comparing with a reference
+
+We can now verify the predicted cell types against a reference. We start by looking at marker genes.
+
+```{r}
+reference_basic <- readRDS(file.path(datadir, 'Data/data_Steidl_dataset_082221_reanalyzed_annotated_steidl_dataset_steidl_reference_basic.rds'))
+reference_basic_cti <- process_cell_type_info(reference_basic, levels(reference_basic@cell_types))
+puck <- readRDS(file.path(datadir, '/Data/cancer_puck.rds'))
+
+cur_cell_types <- setdiff(levels(reference_basic@cell_types), 'Activated_cycling_T_cells')
+cell_type_info_restr = reference_basic_cti
+cell_type_info_restr[[1]] = cell_type_info_restr[[1]][, cur_cell_types]
+cell_type_info_restr[[2]] = cur_cell_types; cell_type_info_restr[[3]] = length(cur_cell_types)
+de_genes <- get_de_genes(cell_type_info_restr, puck, fc_thresh = 2, expr_thresh = .0001, MIN_OBS = 3)
+marker_data_de = get_marker_data(cell_type_info_restr[[2]], cell_type_info_restr[[1]], de_genes)
+
+genes <- intersect(rownames(marker_data_de[marker_data_de$cell_type == 'CD4_T_cells', ]), RCTD_pred@internal_vars$gene_list_reg)
+
+normalized_info <- apply(RCTD_pred@cell_type_info$renorm[[1]][genes, ], MARGIN = 1, FUN = function(x) log(x) - mean(log(x)))
+data <- melt(normalized_info)
+ggplot(data, aes(factor(Var2), factor(Var1), fill= value)) +
+    geom_tile() +
+    theme_classic() +
+    scale_fill_gradientn(colors = pals::brewer.rdbu(20)[1:20], limits=c(-15,15)) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    xlab('Marker Genes')+ ylab('Cell Types')
+```
+
+## Cancer marker genes
 
 We can also find marker genes for the new cancer cell type.
 
@@ -100,12 +145,176 @@ get_marker_data <- function(cell_type_names, cell_type_means, gene_list) {
   return(marker_data)
 }
 cur_cell_types <- c('CD4_T_cells', 'CD8_T_cells', 'Monocytes_macrophages', 'Cancer_cells')
-puck <- RCTDpred@spatialRNA
-cell_type_info_restr = RCTDpred@cell_type_info$info
+puck <- RCTD_pred@spatialRNA
+cell_type_info_restr = RCTD_pred@cell_type_info$info
 cell_type_info_restr[[1]] = cell_type_info_restr[[1]][,cur_cell_types]
+cell_type_info_restr[[2]] = cur_cell_types; cell_type_info_restr[[3]] = length(cur_cell_types)
+de_genes <- get_de_genes(cell_type_info_restr, puck, fc_thresh = 1, expr_thresh = .0001, MIN_OBS = 3)
+marker_data_de = get_marker_data(cell_type_info_restr[[2]], cell_type_info_restr[[1]], de_genes)
+cancer_data_de = marker_data_de[marker_data_de$cell_type == 'Cancer_cells', ]
+cancer_data_de[order(cancer_data_de$log_fc, decreasing = T),]
+```
+
+We can also observe the expression of known marker genes for cancer cells across the predicted cell types.
+
+```{r cancer_marker}
+cancer_genes <- readRDS(file.path(datadir, 'Data/HRS_signature.rds'))
+cell_type_info <- RCTD_pred@cell_type_info$info[[1]]
+normalized_info <- apply(cell_type_info[intersect(rownames(cell_type_info), cancer_genes), ], MARGIN = 1, FUN = function(x) log(x) - mean(log(x)))
+data <- melt(normalized_info)
+ggplot(data, aes(factor(Var2), factor(Var1), fill= value)) +
+    geom_tile() +
+    theme_classic() +
+    scale_fill_gradientn(colors = pals::brewer.rdbu(20), limits=c(-10,10)) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    xlab('Marker Genes')+ ylab('Cell Types')
+```
+```{r}
+cancer_genes <- readRDS(file.path(datadir, 'Data/HRS_signature.rds'))
+cell_type_info <- RCTD_pred@cell_type_info$info[[1]]
+normalized_info <- apply(cell_type_info[intersect(rownames(cell_type_info), cancer_genes), ], MARGIN = 1, FUN = function(x) x / max(x))
+data <- melt(normalized_info)
+ggplot(data, aes(factor(Var2), factor(Var1), fill= value)) +
+    geom_tile() +
+    theme_classic() +
+    scale_fill_gradientn(colors = pals::brewer.blues(20), limits=c(0, 1)) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    xlab('Marker Genes')+ ylab('Cell Types')
+```
+
+
+## Immune cell subtypes
+
+We can now explore immune cell subtypes by running full mode on only pixels of a single cell type. We will focus on T-cells.
+
+```{r eval=F}
+RCTD_list <- readRDS(file.path(datadir, 'Objects/vignette_v2/cancer_RCTD_final.rds'))
+RCTD_pred <- RCTD_list[[length(RCTD_list)]]
+```
+
+```{r}
+T_cell_RCTD <- initialize.subtypes(RCTD_pred, c('CD4_T_cells', 'CD8_T_cells'), resolution = 1.2)
+T_cell <- run.subtypes(T_cell_RCTD)
+saveRDS(T_cell, file.path(datadir, 'Objects/vignette_v1/T_cell.rds'))
+```
+
+
+### CD4 T Cells
+
+```{r eval=F}
+CD4_RCTD <- initialize.subtypes(RCTD_pred, 'CD4_T_cells', resolution = 0.3)
+CD4_RCTD <- run.subtypes(CD4_RCTD)
+saveRDS(CD4_RCTD, file.path(datadir, 'Objects/vignette_v1/CD4_RCTD.rds'))
+```
+
+### CD8 T Cells
+
+```{r eval=F}
+CD8_RCTD <- initialize.subtypes(RCTD_pred, 'CD8_T_cells', resolution = 0.7)
+CD8_RCTD <- run.subtypes(CD8_RCTD)
+saveRDS(CD8_RCTD, file.path(datadir, 'Objects/vignette_v1/CD8_RCTD.rds'))
+```
+
+We can spatially plot cell subtypes.
+
+```{r subtype_plot, fig.height = 6, fig.width = 12}
+predicted_plot <- function(x) {
+  plot_puck_continuous(RCTD_pred@originalSpatialRNA, colnames(RCTD_pred@originalSpatialRNA@counts), RCTD_pred@results$weights[, x], size = 0.1, my_pal = pals::brewer.blues(20)[2:20], title = sprintf('Cluster %s', x))
+} 
+
+CD4_RCTD <- readRDS(file.path(datadir, 'Objects/vignette_v1/CD4_RCTD.rds'))
+RCTD_pred <- CD4_RCTD[[length(CD4_RCTD)]]
+plots = list()
+
+for (i in 0:2) {
+  plots[[i+1]] <- predicted_plot(as.character(i))
+}
+
+ggarrange(plotlist = plots)
+
+CD8_RCTD <- readRDS(file.path(datadir, 'Objects/vignette_v1/CD8_RCTD.rds'))
+RCTD_pred <- CD8_RCTD[[length(CD8_RCTD)]]
+plots = list()
+
+for (i in 0:2) {
+  plots[[i+1]] <- predicted_plot(as.character(i))
+}
+
+ggarrange(plotlist = plots)
+```
+
+We can compare the unsupervised subtypes to reference datasets.
+
+```{r}
+reference_int <- readRDS(file.path(datadir, 'Data/data_Steidl_dataset_082221_reanalyzed_annotated_steidl_dataset_steidl_reference_int.rds'))
+reference_int_cti <- process_cell_type_info(reference_int, c('CD4_T_helper_cells', 'Regulatory_T_cells', 'Naive_CD4_T_cells', 'Naive_CD8_T_cells', 'Cytotoxic_CD8_T_cells', 'Activated_cycling_T_cells'))
+puck <- readRDS(file.path(datadir, 'Data/cancer_puck.rds'))
+
+get_marker_data <- function(cell_type_names, cell_type_means, gene_list) {
+  marker_means = cell_type_means[gene_list,]
+  marker_norm = marker_means / rowSums(marker_means)
+  marker_data = as.data.frame(cell_type_names[max.col(marker_means)])
+  marker_data$max_epr <- apply(cell_type_means[gene_list,],1,max)
+  colnames(marker_data) = c("cell_type",'max_epr')
+  rownames(marker_data) = gene_list
+  marker_data$log_fc <- 0
+  epsilon <- 1e-9
+  for(cell_type in unique(marker_data$cell_type)) {
+    cur_genes <- gene_list[marker_data$cell_type == cell_type]
+    other_mean = rowMeans(cell_type_means[cur_genes,cell_type_names != cell_type])
+    marker_data$log_fc[marker_data$cell_type == cell_type] <- log(epsilon + cell_type_means[cur_genes,cell_type]) - log(epsilon + other_mean)
+  }
+  return(marker_data)
+}
+
+cur_cell_types <- c('Regulatory_T_cells', 'Naive_CD8_T_cells', 'Cytotoxic_CD8_T_cells')
+cell_type_info_restr = reference_int_cti
+cell_type_info_restr[[1]] = cell_type_info_restr[[1]][, cur_cell_types]
 cell_type_info_restr[[2]] = cur_cell_types; cell_type_info_restr[[3]] = length(cur_cell_types)
 de_genes <- get_de_genes(cell_type_info_restr, puck, fc_thresh = 1.5, expr_thresh = .0001, MIN_OBS = 3)
 marker_data_de = get_marker_data(cell_type_info_restr[[2]], cell_type_info_restr[[1]], de_genes)
-marker_data_de[marker_data_de$cell_type == 'Cancer_cells', ]
+
+CD4 <- CD4_RCTD[[length(CD4_RCTD)]]
+CD4@spatialRNA <- CD4@originalSpatialRNA
+CD4_cti <- cell_type_info_from_de(CD4, cell_types = c('0', '1', '2'), gene_list = rownames(marker_data_de))
+
+#tab <- marker_data_de[marker_data_de$cell_type == 'Cytotoxic_CD8_T_cells',]
+#tail(rownames(tab[order(tab$log_fc),]))
+
+CD8 <- CD8_RCTD[[length(CD8_RCTD)]]
+CD8@spatialRNA <- CD8@originalSpatialRNA
+CD8_cti <- cell_type_info_from_de(CD8, cell_types = c('0', '1', '2'), gene_list = rownames(marker_data_de))
+
+genes <- rownames(marker_data_de[marker_data_de$cell_type == 'Naive_CD4_T_cells', ])
+normalized_info <- apply(CD4_cti$info[[1]][genes, ], MARGIN = 1, FUN = function(x) x/max(x))
+heatmap(normalized_info, Colv = NA, Rowv = NA, scale="none")
+
+genes <- rownames(marker_data_de[marker_data_de$cell_type == 'Cytotoxic_CD8_T_cells', ])
+normalized_info <- apply(CD8_cti$info[[1]][genes, ], MARGIN = 1, FUN = function(x) x/max(x))
+heatmap(normalized_info, Colv = NA, Rowv = NA, scale="none")
+```
+
+We can look at gene correlation.
+
+```{r}
+CD4_gene_correlation <- cor(CD4_cti[CD4_genes, ], reference_int_cti[[1]][CD4_genes, ])
+data <- melt(CD4_gene_correlation)
+ggplot(data, aes(Var1, Var2, fill= value)) +
+                           geom_tile() +
+                           theme_classic() +
+                           scale_fill_gradientn(colors = pals::brewer.rdbu(20)[2:19], limits=c(-1,1), name='Correlation') +
+                           theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+                           xlab('True Cell Type')+ ylab('Predicted Cell Type')
+
+
+CD8_gene_correlation <- cor(CD8_cti[CD8_genes, ], reference_int_cti[[1]][CD8_genes, ])
+data <- melt(CD8_gene_correlation)
+ggplot(data, aes(Var1, Var2, fill= value)) +
+                           geom_tile() +
+                           theme_classic() +
+                           scale_fill_gradientn(colors = pals::brewer.rdbu(20)[2:19], limits=c(-1,1), name='Correlation') +
+                           theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+                           xlab('True Cell Type')+ ylab('Predicted Cell Type')
+
 ```
 

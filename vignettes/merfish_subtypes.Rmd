@@ -1,15 +1,14 @@
 ---
 title: "Neuronal Clusters"
 author: "Alex Li"
-date: "May 11th, 2022"
+date: "June 14th, 2022"
 output: html_document
 ---
 
 ```{r setup}
 datadir <- '~/UROP'
-source(file.path(datadir, 'R/algorithm.R'))
+source(file.path(datadir, 'R/unsupervised.R'))
 source(file.path(datadir, 'R/analysis.R'))
-library(ggpubr)
 ```
 
 
@@ -28,21 +27,12 @@ We demonstrate using the model to identify excitatory and inhibitory neuronal cl
 Using our unsupervised model, we were able to find the excitatory neurons as cell types 0, 5, and 7. We will use these predicted cell types to further predict subpopulations of excitatory neurons.
 
 ```{r, eval=F}
-puck <- readRDS(file.path(datadir, '/Objects/MERFISH_puck_20um2.rds'))
-RCTD_list <- readRDS(file.path(datadir, 'Objects/final/MERFISH_20um2_final.rds'))
-RCTDpred <- RCTD_list[[length(RCTD_list)]]
-results_df <- RCTDpred@results$results_df
-barcodes <- rownames(results_df[results_df$first_type %in% c('0', '5', '7'), ])
-excitatory_puck <- restrict_puck(puck, barcodes)
-gene_list <- puck@counts@Dimnames[[1]]
-excitatory_RCTD <- run.unsupervised(
-  excitatory_puck,
-  resolution = 1,
-  gene_list = gene_list,
-  doublet_mode = 'full',
-  max_iter = 1000
-)
-saveRDS(excitatory_RCTD, file.path(datadir, 'Objects/final/MERFISH_excitatory.rds'))
+RCTD_list <- readRDS(file.path(datadir, 'Objects/vignette_v1/MERFISH_20um2_final.rds'))
+RCTD_pred <- RCTD_list[[length(RCTD_list)]]
+gene_list <- RCTD_pred@internal_vars$gene_list_reg
+excitatory_RCTD <- initialize.subtypes(RCTD_pred, c('0', '5', '7'), resolution = 1.5, gene_list = gene_list)
+excitatory_RCTD <- run.subtypes(excitatory_RCTD)
+saveRDS(excitatory_RCTD, file.path(datadir, 'Objects/vignette_v1/MERFISH_excitatory.rds'))
 ```
 
 ### Compare with ground truth
@@ -50,15 +40,15 @@ saveRDS(excitatory_RCTD, file.path(datadir, 'Objects/final/MERFISH_excitatory.rd
 We can compute the mean proportion of each of the predicted cell types within each neuronal cluster to assign each neuronal cluster to one of our generated clusters. We only display truth clusters that contain at least ten barcodes.
 
 ```{r fig.width = 12}
-RCTD_list <- readRDS(file.path(datadir, 'Objects/final/MERFISH_excitatory.rds'))
-RCTDpred <- RCTD_list[[length(RCTD_list)]]
-truth <- readRDS(file.path(datadir, 'Objects/MERFISH_truth_20um2.rds'))
+RCTD_list <- readRDS(file.path(datadir, 'Objects/vignette_v1/MERFISH_excitatory.rds'))
+RCTD_pred <- RCTD_list[[length(RCTD_list)]]
+truth <- readRDS(file.path(datadir, 'Objects/vignette_v1/MERFISH_truth_20um2.rds'))
 
 my_table = truth$annotDf
 my_table = my_table[my_table$Cell_class == "Excitatory", ]
 my_table$Neuron_cluster_ID <- factor(my_table$Neuron_cluster_ID)
 
-weights <- RCTDpred@results$weights
+weights <- RCTD_pred@results$weights[, RCTD_pred@internal_vars$subtypes]
 df <- data.frame(matrix(ncol = dim(weights)[2], nrow = length(levels(my_table$Neuron_cluster_ID))))
 colnames(df) <- colnames(weights)
 rownames(df) <- levels(my_table$Neuron_cluster_ID)
@@ -73,7 +63,7 @@ data <- melt(data.matrix(df))
 plot <- ggplot(data, aes(factor(Var1), factor(Var2), fill= value)) +
 						   geom_tile() +
 						   theme_classic() +
-						   scale_fill_gradientn(colors = pals::brewer.blues(20)[2:20], limits=c(0,1), name='Mean Proportion') +
+						   scale_fill_gradientn(colors = pals::brewer.blues(20)[1:20], limits=c(0,1), name='Mean Proportion') +
 						   theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
 						   xlab('True Cluster')+ ylab('Predicted Cluster')
 plot
@@ -81,9 +71,9 @@ plot
 
 Once we spatially plot the ground truth clusters with their associated predicted clusters, we can see that our unsupervised model is able to extract cell cluster information successfully.
 
-```{r fig.height = 48, fig.width = 12}
+```{r fig.height = 36, fig.width = 12}
 predicted_plot <- function(x) {
-  plot_puck_continuous(RCTDpred@originalSpatialRNA, colnames(RCTDpred@originalSpatialRNA@counts), RCTDpred@results$weights[, x], size = 0.5, my_pal = pals::brewer.blues(20)[2:20], title = x)
+  plot_puck_continuous(RCTD_pred@originalSpatialRNA, colnames(RCTD_pred@originalSpatialRNA@counts), RCTD_pred@results$weights[, x], size = 0.5, my_pal = pals::brewer.blues(20)[2:20], title = sprintf('Cluster %s', x))
 } 
 truth_plot <- function(types) {
   subtable <- my_table[my_table$Neuron_cluster_ID %in% types, ]
@@ -97,12 +87,13 @@ plots = list()
 
 for (i in 1:length(colnames(df))) {
   x <- colnames(df)[i]
-  true_types <- rownames(df)[which(df[, x] > 0.25)]
+  true_types <- rownames(df)[which(df[, x] > 0.4)]
   if (length(true_types) > 0) {
     plots[[2*i-1]] <- predicted_plot(x)
     plots[[2*i]] <- truth_plot(true_types)
   }
 }
+plots <- plots[!sapply(plots,is.null)]
 
 ggarrange(plotlist = plots, nrow = length(plots) / 2, ncol = 2)
 ```
@@ -115,21 +106,12 @@ ggarrange(plotlist = plots, nrow = length(plots) / 2, ncol = 2)
 We run the model on predicted cell type 8 from our unsupervised model, which best corresponds to inhibitory neurons.
 
 ```{r, eval=F}
-puck <- readRDS(file.path(datadir, '/Objects/MERFISH_puck_20um2.rds'))
-RCTD_list <- readRDS(file.path(datadir, 'Objects/final/MERFISH_20um2_final.rds'))
-RCTDpred <- RCTD_list[[length(RCTD_list)]]
-results_df <- RCTDpred@results$results_df
-barcodes <- rownames(results_df[results_df$first_type == '8', ])
-inhibitory_puck <- restrict_puck(puck, barcodes)
-gene_list <- puck@counts@Dimnames[[1]]
-inhibitory_RCTD <- run.unsupervised(
-  inhibitory_puck,
-  resolution = 1,
-  gene_list = gene_list,
-  doublet_mode = 'full',
-  max_iter = 1000
-)
-saveRDS(inhibitory_RCTD, file.path(datadir, 'Objects/final/MERFISH_inhibitory.rds'))
+RCTD_list <- readRDS(file.path(datadir, 'Objects/vignette_v1/MERFISH_20um2_final.rds'))
+RCTD_pred <- RCTD_list[[length(RCTD_list)]]
+gene_list <- RCTD_pred@internal_vars$gene_list_reg
+inhibitory_RCTD <- initialize.subtypes(RCTD_pred, '8', resolution = 1, gene_list = gene_list)
+inhibitory_RCTD <- run.subtypes(inhibitory_RCTD)
+saveRDS(inhibitory_RCTD, file.path(datadir, 'Objects/vignette_v1/MERFISH_inhibitory.rds'))
 ```
 
 ### Compare with ground truth
@@ -137,15 +119,15 @@ saveRDS(inhibitory_RCTD, file.path(datadir, 'Objects/final/MERFISH_inhibitory.rd
 We create a heatmap between true and predicted clusters, just like we did for excitatory neurons.
 
 ```{r fig.width = 12}
-RCTD_list <- readRDS(file.path(datadir, 'Objects/final/MERFISH_inhibitory.rds'))
-RCTDpred <- RCTD_list[[length(RCTD_list)]]
-truth <- readRDS(file.path(datadir, 'Objects/MERFISH_truth_20um2.rds'))
+RCTD_list <- readRDS(file.path(datadir, 'Objects/vignette_v1/MERFISH_inhibitory.rds'))
+RCTD_pred <- RCTD_list[[length(RCTD_list)]]
+truth <- readRDS(file.path(datadir, 'Objects/vignette_v1/MERFISH_truth_20um2.rds'))
 
 my_table = truth$annotDf
 my_table = my_table[my_table$Cell_class == "Inhibitory", ]
 my_table$Neuron_cluster_ID <- factor(my_table$Neuron_cluster_ID)
 
-weights <- RCTDpred@results$weights
+weights <- RCTD_pred@results$weights[, RCTD_pred@internal_vars$subtypes]
 df <- data.frame(matrix(ncol = dim(weights)[2], nrow = length(levels(my_table$Neuron_cluster_ID))))
 colnames(df) <- colnames(weights)
 rownames(df) <- levels(my_table$Neuron_cluster_ID)
@@ -167,9 +149,9 @@ plot
 
 Again, we plot the cell types spatially.
 
-```{r fig.height = 48, fig.width = 12}
+```{r fig.height = 24, fig.width = 12}
 predicted_plot <- function(x) {
-  plot_puck_continuous(RCTDpred@originalSpatialRNA, colnames(RCTDpred@originalSpatialRNA@counts), RCTDpred@results$weights[, x], size = 0.5, my_pal = pals::brewer.blues(20)[2:20], title = x)
+  plot_puck_continuous(RCTD_pred@originalSpatialRNA, colnames(RCTD_pred@originalSpatialRNA@counts), RCTD_pred@results$weights[, x], size = 0.5, my_pal = pals::brewer.blues(20)[2:20], title = sprintf('Cluster %s', x))
 } 
 truth_plot <- function(types) {
   subtable <- my_table[my_table$Neuron_cluster_ID %in% types, ]
@@ -183,12 +165,13 @@ plots = list()
 
 for (i in 1:length(colnames(df))) {
   x <- colnames(df)[i]
-  true_types <- rownames(df)[which(df[, x] > 0.25)]
+  true_types <- rownames(df)[which(df[, x] > 0.4)]
   if (length(true_types) > 0) {
     plots[[2*i-1]] <- predicted_plot(x)
     plots[[2*i]] <- truth_plot(true_types)
   }
 }
+plots <- plots[!sapply(plots,is.null)]
 
 ggarrange(plotlist = plots, nrow = length(plots) / 2, ncol = 2)
 ```

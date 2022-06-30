@@ -1,15 +1,16 @@
 ---
 title: "Unsupervised Learning of Simulated MERFISH Data"
 author: "Alex Li"
-date: "May 11th, 2022"
-output: html_document
+date: "June 14th, 2022"
+output:
+  html_document:
+    toc: true
 ---
 
 ```{r setup}
 datadir <- '~/UROP'
-source(file.path(datadir, 'R/algorithm.R'))
+source(file.path(datadir, 'R/unsupervised.R'))
 source(file.path(datadir, 'R/analysis.R'))
-library(ggpubr)
 ```
 
 
@@ -24,7 +25,7 @@ We analyze our model's performance on simulated spatial datasets of varying pixe
 ## Ground truth data
 
 ```{r ground_truth}
-truth <- readRDS(file.path(datadir, 'Objects/MERFISH_truth_20um2.rds'))
+truth <- readRDS(file.path(datadir, 'Objects/vignette_v1/MERFISH_truth_20um2.rds'))
 my_table = truth$annotDf
 my_table$Cell_class <- factor(my_table$Cell_class)
 n_levels = length(levels(my_table$Cell_class))
@@ -42,15 +43,12 @@ plot
 ## Unsupervised learning on 20um2 resolution
 
 ```{r unsupervised_doublet, eval=F}
-puck <- readRDS(file.path(datadir, '/Objects/MERFISH_puck_20um2.rds'))
+puck <- readRDS(file.path(datadir, '/Objects/vignette_v1/MERFISH_puck_20um2.rds'))
+cell_type_info <- initialize.clusters(puck, resolution = 0.15)
 gene_list <- puck@counts@Dimnames[[1]]
-RCTD_list <- run.unsupervised(
-  puck,
-  resolution = 0.15,
-  gene_list = gene_list,
-  convergence_thresh = 0.999
-)
-saveRDS(RCTD_list, file.path(datadir, 'Objects/final/MERFISH_20um2_final.rds'))
+myRCTD <- create.object(puck, cell_type_info, gene_list_reg = gene_list)
+myRCTD <- run.algorithm(myRCTD)
+saveRDS(myRCTD, file.path(datadir, 'Objects/vignette_v1/MERFISH_20um2_final.rds'))
 ```
 
 ### Data preprocessing
@@ -58,10 +56,10 @@ saveRDS(RCTD_list, file.path(datadir, 'Objects/final/MERFISH_20um2_final.rds'))
 For the purposes of the analysis, ground truth pixels with a minority UMI proportion of at least 0.2 were considered doublets.
 
 ```{r preprocessing_doublet}
-RCTD_list <- readRDS(file.path(datadir, 'Objects/final/MERFISH_20um2_final.rds'))
-RCTDpred <- RCTD_list[[length(RCTD_list)]]
+RCTD_list <- readRDS(file.path(datadir, 'Objects/vignette_v1/MERFISH_20um2_final.rds'))
+RCTD_pred <- RCTD_list[[length(RCTD_list)]]
 
-pred_results <- RCTDpred@results$results_df
+pred_results <- RCTD_pred@results$results_df
 truth_results <- as.data.frame(truth$gtSpotTopics[rownames(pred_results),])
 
 doublet_certain <- apply(truth_results, MARGIN = 1, function(x) length(which(x >= 0.2)) == 2)
@@ -99,7 +97,7 @@ plot_all_cell_types <- function(results_df, coords, cell_type_names, resultsdir,
   dev.off()
   return(plot)
 }
-plot_all_cell_types(RCTDpred@results$results_df, RCTDpred@originalSpatialRNA@coords, RCTDpred@cell_type_info$renorm[[2]], '..', size=0.6)
+plot_all_cell_types(RCTD_pred@results$results_df, RCTD_pred@originalSpatialRNA@coords, RCTD_pred@cell_type_info$renorm[[2]], '..', size=0.3)
 ```
 
 
@@ -124,66 +122,212 @@ mytable
 
 ### Visualizing progress across iterations
 
-We can visualize how the cell type assignments change by plotting each iteration of cell type assignments into tSNE embeddings.
+We can visualize how the cell type assignments change by plotting the assignment of excitatory and inhibitory neurons as a function of their expression of excitatory and inhibitory neuronal marker genes.
+
+First, we can determine the marker genes with the ground truth data.
+
+```{r, message = T}
+get_marker_data <- function(cell_type_names, cell_type_means, gene_list) {
+  marker_means = cell_type_means[gene_list,]
+  marker_norm = marker_means / rowSums(marker_means)
+  marker_data = as.data.frame(cell_type_names[max.col(marker_means)])
+  marker_data$max_epr <- apply(cell_type_means[gene_list,],1,max)
+  colnames(marker_data) = c("cell_type",'max_epr')
+  rownames(marker_data) = gene_list
+  marker_data$log_fc <- 0
+  epsilon <- 1e-9
+  for(cell_type in unique(marker_data$cell_type)) {
+    cur_genes <- gene_list[marker_data$cell_type == cell_type]
+    other_mean = rowMeans(cell_type_means[cur_genes,cell_type_names != cell_type])
+    marker_data$log_fc[marker_data$cell_type == cell_type] <- log(epsilon + cell_type_means[cur_genes,cell_type]) - log(epsilon + other_mean)
+  }
+  return(marker_data)
+}
+puck <- readRDS(file.path(datadir, '/Objects/vignette_v1/MERFISH_puck_20um2.rds'))
+truth <- readRDS(file.path(datadir, 'Objects/vignette_v1/MERFISH_truth_20um2.rds'))
+
+cur_cell_types <- c('Astrocyte', 'Endothelial', 'Ependymal', 'Excitatory', 'Inhibitory', 'OD Immature', 'OD Mature')
+cell_type_info_restr = list(t(truth$gtCtGenes))
+cell_type_info_restr[[1]] = cell_type_info_restr[[1]][,cur_cell_types]
+cell_type_info_restr[[2]] = cur_cell_types; cell_type_info_restr[[3]] = length(cur_cell_types)
+de_genes <- get_de_genes(cell_type_info_restr, puck, fc_thresh = 1, expr_thresh = .0001, MIN_OBS = 3)
+marker_data_de = get_marker_data(cell_type_info_restr[[2]], cell_type_info_restr[[1]], de_genes)
+```
+
+Next, we can plot cell type assignments across iterations.
 
 ```{r fig.height = 16, fig.width = 12}
-RCTD_list <- readRDS(file.path(datadir, 'Objects/final/MERFISH_20um2_final.rds'))
-puck <- readRDS(file.path(datadir, '/Objects/MERFISH_puck_20um2.rds'))
+excitatory_genes <- rownames(marker_data_de)[marker_data_de$cell_type == "Excitatory"]
+inhibitory_genes <- rownames(marker_data_de)[marker_data_de$cell_type == "Inhibitory"]
+RCTD_list <- readRDS(file.path(datadir, 'Objects/vignette_v1/MERFISH_20um2_final.rds'))
 
-results_df <- RCTD_list[[length(RCTD_list)]]@results$results_df
-barcodes <- rownames(results_df[results_df$spot_class != 'reject', ])
-assignments <- results_df[results_df$spot_class != 'reject', ]$first_type
-names(assignments) <- barcodes
-
-slide.seq <- CreateSeuratObject(counts = puck@counts, assay = "Spatial")
-slide.seq <- SCTransform(slide.seq, assay = "Spatial", verbose = F)
-slide.seq <- RunPCA(slide.seq, assay = "SCT")
-slide.seq <- RunUMAP(slide.seq, dims = 1:30)
-slide.seq <- RunTSNE(slide.seq, dims = 1:30)
-slide.seq <- FindNeighbors(slide.seq, dims = 1:30)
-slide.seq.clusters <- FindClusters(slide.seq, resolution = 0.15, verbose = F)
+generate_marker_plot <- function(i) {
+  results_df <- RCTD_list[[i]]@results$results_df
+  barcodes <- rownames(results_df[results_df$spot_class != 'reject' & results_df$first_type == '0', ])
+  plot_df <- data.frame(colSums(puck@counts[excitatory_genes, barcodes]) / puck@nUMI[barcodes], colSums(puck@counts[inhibitory_genes, barcodes]) / puck@nUMI[barcodes])
+  colnames(plot_df) = c('Excitatory','Inhibitory')
+  plot_df$type = "Excitatory"
+  plot_df_final <- plot_df[puck@nUMI[barcodes] >= 300,]
+  barcodes <- rownames(results_df[results_df$spot_class != 'reject' & results_df$first_type == '8', ])
+  plot_df <- data.frame(colSums(puck@counts[excitatory_genes, barcodes]) / puck@nUMI[barcodes], colSums(puck@counts[inhibitory_genes, barcodes]) / puck@nUMI[barcodes])
+  colnames(plot_df) = c('Excitatory','Inhibitory')
+  plot_df$type = "Inhibitory"
+  plot_df_final <- rbind(plot_df_final, plot_df[puck@nUMI[barcodes] >= 300,])
+  MULT <- 500
+  plot_df_final$Excitatory <- MULT * plot_df_final$Excitatory
+  plot_df_final$Inhibitory <- MULT * plot_df_final$Inhibitory
+  my_pal = pals::coolwarm(20)
+  p <- ggplot2::ggplot(plot_df_final) + 
+    ggplot2::geom_point(ggplot2::aes(x=Excitatory,y=Inhibitory, color = type),alpha = 0.2,size=1) + 
+    ggplot2::coord_fixed() + ggplot2::theme_classic()  +
+    labs(color="Cluster Cell Type") + guides(color = guide_legend(override.aes = list(size = 3,alpha=1))) + 
+    scale_color_manual(values=c(my_pal[1], my_pal[20]))+ theme(legend.position="top") + xlab('Excitatory Markers') + ylab('Inhibitory Markers') + scale_x_continuous(breaks = c(0,100,200), limits = c(0,300)) + scale_y_continuous(breaks = c(0,100,200), limits = c(0,300)) + ggtitle(sprintf('Iteration %s', i))
+  p
+}
 
 plots = list()
-plots[[1]] <- DimPlot(slide.seq.clusters, reduction = "tsne", label = F)
 for (i in 1:length(RCTD_list)) {
-  results_df <- RCTD_list[[i]]@results$results_df
-  barcodes <- rownames(results_df[results_df$spot_class != 'reject', ])
-  assignments <- results_df[results_df$spot_class != 'reject', ]$first_type
-  names(assignments) <- barcodes
-  slide.seq.clusters@active.ident <- assignments
-  plots[[i+1]] <- DimPlot(slide.seq.clusters, reduction = "tsne", label = F)
+  plots[[i]] <- generate_marker_plot(i)
 }
-ggarrange(plots[[1]], plots[[4]], plots[[7]], plots[[10]], plots[[13]], plots[[16]], plots[[19]], plots[[22]], plots[[25]], nrow = 3, ncol = 3)
+
+ggarrange(plots[[1]], plots[[3]], plots[[5]], plots[[7]], plots[[9]], plots[[11]], plots[[13]], plots[[15]], plots[[17]], nrow = 3, ncol = 3, common.legend = T)
 ```
+
+To quantify the change in cell type assignment across iterations more succinctly, we can plot the mean difference between inhibitory and excitatory gene expression as a function of iteration number for both cell types. The error regions represent one standard deviation.
+
+```{r}
+generate_marker_data <- function(i) {
+  results_df <- RCTD_list[[i]]@results$results_df
+  barcodes <- rownames(results_df[results_df$spot_class != 'reject' & results_df$first_type == '0', ])
+  plot_df <- data.frame(colSums(puck@counts[excitatory_genes, barcodes]) / puck@nUMI[barcodes], colSums(puck@counts[inhibitory_genes, barcodes]) / puck@nUMI[barcodes])
+  colnames(plot_df) = c('Excitatory','Inhibitory')
+  plot_df$type = "Excitatory"
+  plot_df_final <- plot_df[puck@nUMI[barcodes] >= 300,]
+  barcodes <- rownames(results_df[results_df$spot_class != 'reject' & results_df$first_type == '8', ])
+  plot_df <- data.frame(colSums(puck@counts[excitatory_genes, barcodes]) / puck@nUMI[barcodes], colSums(puck@counts[inhibitory_genes, barcodes]) / puck@nUMI[barcodes])
+  colnames(plot_df) = c('Excitatory','Inhibitory')
+  plot_df$type = "Inhibitory"
+  plot_df_final <- rbind(plot_df_final, plot_df[puck@nUMI[barcodes] >= 300,])
+  return(plot_df_final)
+}
+
+df <- data.frame(matrix(ncol = 3, nrow = length(RCTD_list)))
+colnames(df) <- c('iteration', 'mean', 'sd')
+df$iteration <- as.numeric(rownames(df))
+for (i in 1:length(RCTD_list)) {
+  data <- generate_marker_data(i)
+  data$diff <- data$Inhibitory - data$Excitatory
+  df[i, 'mean'] <- mean(data[data$type == 'Excitatory', ]$diff)
+  df[i, 'sd'] <- sd(data[data$type == 'Excitatory', ]$diff)
+}
+df$type <- 'Excitatory'
+df_final <- df
+
+df <- data.frame(matrix(ncol = 3, nrow = length(RCTD_list)))
+colnames(df) <- c('iteration', 'mean', 'sd')
+df$iteration <- as.numeric(rownames(df))
+for (i in 1:length(RCTD_list)) {
+  data <- generate_marker_data(i)
+  data$diff <- data$Inhibitory - data$Excitatory
+  df[i, 'mean'] <- mean(data[data$type == 'Inhibitory', ]$diff)
+  df[i, 'sd'] <- sd(data[data$type == 'Inhibitory', ]$diff)
+}
+df$type <- 'Inhibitory'
+
+df_final <- rbind(df_final, df)
+MULT <- 500
+df_final$mean <- MULT * df_final$mean
+df_final$sd <- MULT * df_final$sd
+
+my_pal = pals::coolwarm(20)
+ggplot(data=df_final, aes(x=iteration, y=mean, ymin=mean-sd, ymax=mean+sd, fill=type)) + 
+  geom_line() + 
+  geom_ribbon(alpha=0.5) + 
+  labs(fill="Cell Type") +
+  xlab('Iteration') +
+  ylab('Mean Expression Difference (Inhibitory - Excitatory)') +
+  theme_minimal() +
+  scale_y_continuous(breaks = c(-200,-100,0,100,200), limits = c(-200,200)) +
+  scale_fill_manual(values=c(my_pal[1], my_pal[20]))
+```
+
+### Comparing marker gene expression and proportion
+
+With the marker gene data, we can also plot the doublet mode generated proportion of excitatory and inhibitory on each pixel in marker gene space. We will only look at pixels where the top two candidate cell types are excitatory and inhibitory neurons.
+
+```{r}
+results_df <- RCTD_list[[length(RCTD_list)]]@results$results_df
+barcodes <- rownames(results_df[results_df$spot_class != 'reject' & results_df$first_type == '8' & results_df$second_type == '0', ])
+plot_df <- data.frame(colSums(puck@counts[excitatory_genes, barcodes]) / puck@nUMI[barcodes], colSums(puck@counts[inhibitory_genes, barcodes]) / puck@nUMI[barcodes])
+colnames(plot_df) = c('Excitatory','Inhibitory')
+plot_df$proportion = RCTD_list[[i]]@results$weights_doublet[barcodes, ][, 'first_type']
+plot_df_final <- plot_df[puck@nUMI[barcodes] >= 300,]
+barcodes <- rownames(results_df[results_df$spot_class != 'reject' & results_df$first_type == '0' & results_df$second_type == '8', ])
+plot_df <- data.frame(colSums(puck@counts[excitatory_genes, barcodes]) / puck@nUMI[barcodes], colSums(puck@counts[inhibitory_genes, barcodes]) / puck@nUMI[barcodes])
+colnames(plot_df) = c('Excitatory','Inhibitory')
+plot_df$proportion = RCTD_list[[i]]@results$weights_doublet[barcodes, ][, 'second_type']
+plot_df_final <- rbind(plot_df_final, plot_df[puck@nUMI[barcodes] >= 300,])
+MULT <- 500
+plot_df_final$Excitatory <- MULT * plot_df_final$Excitatory
+plot_df_final$Inhibitory <- MULT * plot_df_final$Inhibitory
+
+ggplot2::ggplot(plot_df_final) + ggplot2::geom_point(ggplot2::aes(x=Excitatory,y=Inhibitory, color = proportion),alpha = 1,size=0.3) + ggplot2::coord_fixed() + ggplot2::scale_shape_identity() + ggplot2::theme_classic() + ggplot2::scale_size_identity() + labs(color="Inhibitory Proportion") + ggplot2::scale_colour_gradientn(colors = pals::brewer.rdbu(20)[2:19]) + xlab('Excitatory Markers') + ylab('Inhibitory Markers') + scale_x_continuous(breaks = c(0,100,200), limits = c(0,300)) + scale_y_continuous(breaks = c(0,100,200), limits = c(0,300))
+```
+
+Finally, treating excitatory and inhibitory neurons as subtypes of one cell type, we can run the unsupervised model's full mode on the pixels represented by one of the two neuron cell types so that each pixel gets some proportion of each cell type.
+
+We first run the cell subtype model, which is the same as running full mode.
+
+```{r eval=F}
+RCTD_list <- readRDS(file.path(datadir, 'Objects/vignette_v1/MERFISH_20um2_final.rds'))
+RCTD_pred <- RCTD_list[[length(RCTD_list)]]
+gene_list <- RCTD_pred@internal_vars$gene_list_reg
+neuron_RCTD <- initialize.subtypes(RCTD_pred, c('0', '5', '7', '8'), resolution = 0.02, gene_list = gene_list)
+neuron_RCTD <- run.subtypes(neuron_RCTD)
+saveRDS(neuron_RCTD, file.path(datadir, 'Objects/vignette_v1/MERFISH_neurons.rds'))
+```
+
+We can then look at the proportion of the two neuron types in each pixel, plotted in marker gene space.
+
+```{r}
+RCTD_list <- readRDS(file.path(datadir, 'Objects/vignette_v1/MERFISH_neurons.rds'))
+
+results_df <- RCTD_list[[length(RCTD_list)]]@results$weights
+barcodes <- rownames(results_df)
+plot_df <- data.frame(colSums(puck@counts[excitatory_genes, barcodes]) / puck@nUMI[barcodes], colSums(puck@counts[inhibitory_genes, barcodes]) / puck@nUMI[barcodes])
+colnames(plot_df) = c('Excitatory','Inhibitory')
+plot_df$proportion = results_df[, 'subtype_0'] / (results_df[, 'subtype_0'] + results_df[, 'subtype_1'])
+plot_df_final <- plot_df[puck@nUMI[barcodes] >= 300,]
+MULT <- 500
+plot_df_final$Excitatory <- MULT * plot_df_final$Excitatory
+plot_df_final$Inhibitory <- MULT * plot_df_final$Inhibitory
+
+ggplot2::ggplot(plot_df_final) + ggplot2::geom_point(ggplot2::aes(x=Excitatory,y=Inhibitory, color = proportion),alpha = 1,size=0.3) + ggplot2::coord_fixed() + ggplot2::scale_shape_identity() + ggplot2::theme_classic() + ggplot2::scale_size_identity() + labs(color="Inhibitory Proportion") + ggplot2::scale_colour_gradientn(colors = pals::brewer.rdbu(20)) + xlab('Excitatory Markers') + ylab('Inhibitory Markers') + scale_x_continuous(breaks = c(0,100,200), limits = c(0,300)) + scale_y_continuous(breaks = c(0,100,200), limits = c(0,300))
+```
+
 
 ## Unsupervised learning on 50um2 resolution
 
 ```{r unsupervised_full, eval=F}
-puck <- readRDS(file.path(datadir, '/Objects/MERFISH_puck_50um2.rds'))
+puck <- readRDS(file.path(datadir, '/Objects/vignette_v1/MERFISH_puck_50um2.rds'))
 gene_list <- puck@counts@Dimnames[[1]]
-RCTD_list <- run.unsupervised(
-  puck,
-  doublet_mode = 'full',
-  resolution = 0.6,
-  gene_list = gene_list,
-  max_iter = 1000
-)
-saveRDS(RCTD_list, file.path(datadir, 'Objects/final/MERFISH_50um2_FULL_final.rds'))
+cell_type_info <- initialize.clusters(puck, resolution = 0.6)
+myRCTD <- create.object(puck, cell_type_info, gene_list_reg = gene_list)
+myRCTD <- run.algorithm(myRCTD, doublet_mode = 'full')
+saveRDS(myRCTD, file.path(datadir, 'Objects/vignette_v1/MERFISH_50um2_final.rds'))
 ```
 
 ### Data preprocessing
 
-The result proportions have to be normalized to sum up to one.
-
 ```{r preprocessing_full}
-RCTD_list <- readRDS(file.path(datadir, 'Objects/final/MERFISH_50um2_FULL_final.rds'))
-RCTDpred <- RCTD_list[[length(RCTD_list)]]
-truth <- readRDS(file.path(datadir, 'Objects/MERFISH_truth_50um2.rds'))
+RCTD_list <- readRDS(file.path(datadir, 'Objects/vignette_v1/MERFISH_50um2_final.rds'))
+RCTD_pred <- RCTD_list[[length(RCTD_list)]]
+truth <- readRDS(file.path(datadir, 'Objects/vignette_v1/MERFISH_truth_50um2.rds'))
 
-pred_results <- RCTDpred@results$weights
-for (i in 1:dim(pred_results)[1]) {
-  pred_results[i,] = pred_results[i,] / rowSums(pred_results)[i]
-}
+pred_results <- RCTD_pred@results$weights
+#for (i in 1:dim(pred_results)[1]) {
+#  pred_results[i,] = pred_results[i,] / rowSums(pred_results)[i]
+#}
 truth_results <- truth$gtSpotTopics[rownames(pred_results),]
 ```
 
@@ -194,7 +338,7 @@ truth_results <- truth$gtSpotTopics[rownames(pred_results),]
 We make a heatmap of gene expression correlation between the ground truth and predicted gene expression profiles.
 
 ```{r}
-pred_gene <- RCTDpred@cell_type_info$renorm[[1]]
+pred_gene <- RCTD_pred@cell_type_info$renorm[[1]]
 truth_gene <- t(truth$gtCtGenes)
 gene_correlation <- cor(pred_gene, truth_gene)
 heatmap(gene_correlation)
@@ -222,12 +366,50 @@ data$diag[!data$diag] <- NA
 ggplot(data, aes(factor(Var1, levels=true_types), factor(Var2, levels=pred_types), fill= value)) +
 						   geom_tile() +
 						   theme_classic() +
-						   scale_fill_gradientn(colors = pals::brewer.rdbu(20)[2:20], limits=c(-1,1), name='Correlation') +
+						   scale_fill_gradientn(colors = pals::brewer.rdbu(20)[2:19], limits=c(-1,1), name='Correlation') +
 						   theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
 						   xlab('True Cell Type')+ ylab('Predicted Cell Type') + 
                geom_tile(data = data[!is.na(data$diag), ], aes(color = diag), size = 0.7) +
                scale_color_manual(guide = FALSE, values = c('TRUE' = "#D55E00"))
 ```
+
+We can also plot the absolute error proportion for each pixel for each cell type. Plotting us lets us see model performance as a function of ground truth cell type.
+
+```{r fig.width = 12}
+ependymal_df <- as.data.frame(abs(pred_results[, '7'] - truth_results[, 'Ependymal']))
+colnames(ependymal_df) <- 'value'
+ependymal_df$type <- 'Ependymal'
+
+od_immature_df <- as.data.frame(abs(pred_results[, '3'] - truth_results[, 'OD Immature']))
+colnames(od_immature_df) <- 'value'
+od_immature_df$type <- 'OD Immature'
+
+endothelial_df <- as.data.frame(abs(pred_results[, '1'] - truth_results[, 'Endothelial']))
+colnames(endothelial_df) <- 'value'
+endothelial_df$type <- 'Endothelial'
+
+od_mature_df <- as.data.frame(abs(pred_results[, '6'] - truth_results[, 'OD Mature']))
+colnames(od_mature_df) <- 'value'
+od_mature_df$type <- 'OD Mature'
+
+astrocyte_df <- as.data.frame(abs(pred_results[, '5'] - truth_results[, 'Astrocyte']))
+colnames(astrocyte_df) <- 'value'
+astrocyte_df$type <- 'Astrocyte'
+
+excitatory_df <- as.data.frame(abs(pred_results[, '4'] + pred_results[, '8'] - truth_results[, 'Excitatory']))
+colnames(excitatory_df) <- 'value'
+excitatory_df$type <- 'Excitatory'
+
+inhibitory_df <- as.data.frame(abs(pred_results[, '2'] + pred_results[, '0'] - truth_results[, 'Inhibitory']))
+colnames(inhibitory_df) <- 'value'
+inhibitory_df$type <- 'Inhibitory'
+
+abserr_df <- rbind(ependymal_df, od_immature_df, endothelial_df, od_mature_df, astrocyte_df, excitatory_df, inhibitory_df)
+abserr_df$type <- as.factor(abserr_df$type)
+
+ggplot(abserr_df, aes(x=type, y=value)) + geom_boxplot(width=0.1, outlier.shape = NA) + theme_minimal() + ylab('Absolute Error') + xlab('Cell Type') + ylim(0, 0.4)
+```
+
 
 ### Compare with STdeconvolve
 
@@ -235,7 +417,7 @@ We first run STdeconvolve on the dataset.
 
 ```{r results='hide', message=FALSE}
 library(STdeconvolve)
-puck <- readRDS(file.path(datadir, '/Objects/MERFISH_puck_50um2.rds'))
+puck <- readRDS(file.path(datadir, '/Objects/vignette_v1/MERFISH_puck_50um2.rds'))
 cd <- puck@counts
 ldas <- fitLDA(t(cd), Ks = 9)
 optLDA <- optimalModel(models = ldas, opt = "min")
@@ -276,7 +458,7 @@ data$diag[!data$diag] <- NA
 ggplot(data, aes(factor(Var1, levels = true_types), factor(Var2, levels = pred_types), fill= value)) +
 						   geom_tile() +
 						   theme_classic() +
-						   scale_fill_gradientn(colors = pals::brewer.rdbu(20)[2:20], limits=c(-1,1), name='Correlation') +
+						   scale_fill_gradientn(colors = pals::brewer.rdbu(20)[2:19], limits=c(-1,1), name='Correlation') +
 						   theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
 						   xlab('True Cell Type')+ ylab('Predicted Cell Type') + 
                geom_tile(data = data[!is.na(data$diag), ], aes(color = diag), size = 0.7) +
@@ -304,8 +486,8 @@ decon_rmse <- as.data.frame(sqrt((
   (decon_results[, '6'] - truth_results[, 'Endothelial']) ^ 2 + 
   (decon_results[, '5'] - truth_results[, 'OD Mature']) ^ 2 + 
   (decon_results[, '1'] - truth_results[, 'Astrocyte']) ^ 2 + 
-  (decon_results[, '7'] + pred_results[, '8'] - truth_results[, 'Excitatory']) ^ 2 +
-  (decon_results[, '2'] + pred_results[, '4'] - truth_results[, 'Inhibitory']) ^ 2
+  (decon_results[, '7'] + decon_results[, '8'] - truth_results[, 'Excitatory']) ^ 2 +
+  (decon_results[, '2'] + decon_results[, '4'] - truth_results[, 'Inhibitory']) ^ 2
 ) / 7))
 colnames(decon_rmse) <- 'value'
 decon_rmse$method <- 'STdeconvolve'
@@ -316,6 +498,46 @@ ggplot(rmse, aes(x=method, y=value)) +
     geom_violin(trim=T, alpha=0.1) + geom_boxplot(width=0.1) + theme_minimal() + ylab('RMSE') + xlab('Method')
 ```
 
+We can also plot the comparison factored by cell type.
+
+```{r fig.width = 12}
+abserr_df <- abserr_df[abserr_df$type != 'Ependymal', ]
+abserr_df$type <- as.factor(abserr_df$type)
+abserr_df$method <- 'Unsupervised'
+
+od_immature_df <- as.data.frame(abs(decon_results[, '9'] - truth_results[, 'OD Immature']))
+colnames(od_immature_df) <- 'value'
+od_immature_df$type <- 'OD Immature'
+
+endothelial_df <- as.data.frame(abs(decon_results[, '6'] - truth_results[, 'Endothelial']))
+colnames(endothelial_df) <- 'value'
+endothelial_df$type <- 'Endothelial'
+
+od_mature_df <- as.data.frame(abs(decon_results[, '5'] - truth_results[, 'OD Mature']))
+colnames(od_mature_df) <- 'value'
+od_mature_df$type <- 'OD Mature'
+
+astrocyte_df <- as.data.frame(abs(decon_results[, '1'] - truth_results[, 'Astrocyte']))
+colnames(astrocyte_df) <- 'value'
+astrocyte_df$type <- 'Astrocyte'
+
+excitatory_df <- as.data.frame(abs(decon_results[, '7'] + decon_results[, '8'] - truth_results[, 'Excitatory']))
+colnames(excitatory_df) <- 'value'
+excitatory_df$type <- 'Excitatory'
+
+inhibitory_df <- as.data.frame(abs(decon_results[, '2'] + decon_results[, '4'] - truth_results[, 'Inhibitory']))
+colnames(inhibitory_df) <- 'value'
+inhibitory_df$type <- 'Inhibitory'
+
+decon_df <- rbind(od_immature_df, endothelial_df, od_mature_df, astrocyte_df, excitatory_df, inhibitory_df)
+decon_df$type <- as.factor(decon_df$type)
+decon_df$method <- 'STdeconvolve'
+
+mae <- rbind(abserr_df, decon_df)
+
+ggplot(mae, aes(x=type, y=value, fill=factor(method))) + geom_boxplot(width=0.25, outlier.shape = NA) + theme_minimal() + ylab('Absolute Error') + xlab('Cell Type') + ylim(0, 0.4)
+```
+
 
 ### Spatially plot cell type proportions
 
@@ -323,9 +545,9 @@ ggplot(rmse, aes(x=method, y=value)) +
 
 ```{r}
 plot_puck_continuous(
-  RCTDpred@originalSpatialRNA,
-  colnames(RCTDpred@originalSpatialRNA@counts),
-  RCTDpred@results$weights[,'6'],
+  RCTD_pred@originalSpatialRNA,
+  colnames(RCTD_pred@originalSpatialRNA@counts),
+  RCTD_pred@results$weights[,'6'],
   size=3,
   my_pal = pals::brewer.blues(20)[2:20]
 )
@@ -335,9 +557,9 @@ plot_puck_continuous(
 
 ```{r}
 plot_puck_continuous(
-  RCTDpred@originalSpatialRNA,
-  colnames(RCTDpred@originalSpatialRNA@counts),
-  RCTDpred@results$weights[,'7'],
+  RCTD_pred@originalSpatialRNA,
+  colnames(RCTD_pred@originalSpatialRNA@counts),
+  RCTD_pred@results$weights[,'7'],
   size=3,
   my_pal = pals::brewer.blues(20)[2:20]
 )

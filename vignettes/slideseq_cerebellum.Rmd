@@ -1,14 +1,14 @@
 ---
 title: "Unsupervised learning of Slide-seq data"
 author: "Alex Li"
-date: "May 11th, 2022"
+date: "June 14th, 2022"
 output: html_document
 ---
 
 ```{r setup}
 datadir <- '~/UROP'
-source(file.path(datadir, 'R/algorithm.R'))
 source(file.path(datadir, 'R/analysis.R'))
+source(file.path(datadir, 'R/unsupervised.R'))
 ```
 
 
@@ -24,8 +24,10 @@ We now run our model on a real spatial dataset of the cerebellum from Slide-seq.
 
 ```{r unsupervised, eval=F}
 puck <- readRDS(file.path(datadir, '/Data/puckCropped_cerebellum_slideseq.rds'))
-RCTD_list <- run.unsupervised(puck, resolution = 0.5, convergence_thresh = 0.999)
-saveRDS(RCTD_list, file.path(datadir, 'Objects/final/cerebellum_final.rds'))
+cell_type_info <- initialize.clusters(puck, resolution = 0.5)
+myRCTD <- create.object(puck, cell_type_info)
+myRCTD <- run.algorithm(myRCTD)
+saveRDS(myRCTD, file.path(datadir, 'Objects/vignette_v1/cerebellum_new.rds'))
 ```
 
 ## Spatially plotting cell types
@@ -33,7 +35,7 @@ saveRDS(RCTD_list, file.path(datadir, 'Objects/final/cerebellum_final.rds'))
 Before labeling, we can spatially plot the predicted cell types to get an idea of the algorithm's performance.
 
 ```{r plot}
-RCTD_list <- readRDS(file.path(datadir, 'Objects/final/cerebellum_final.rds'))
+RCTD_list <- readRDS(file.path(datadir, 'Objects/vignette_v1/cerebellum_new.rds'))
 RCTD_pred <- RCTD_list[[length(RCTD_list)]]
 plot_all_cell_types(RCTD_pred@results$results_df, RCTD_pred@originalSpatialRNA@coords, RCTD_pred@cell_type_info$renorm[[2]], '..')
 ```
@@ -51,16 +53,6 @@ truth_results <- RCTD_truth@results$results_df
 truth_results$first_type <- gsub('MLI1|MLI2', 'MLI', truth_results$first_type)
 truth_results$second_type <- gsub('MLI1|MLI2', 'MLI', truth_results$second_type)
 
-singlet_table <- function(truth_results, pred_results) {
-  truth_singlet <- truth_results[truth_results$spot_class == 'singlet',]
-  pred_singlet <- pred_results[pred_results$spot_class == 'singlet',]
-  common_barcode <- intersect(row.names(truth_singlet), row.names(pred_singlet))
-  truth_singlet <- truth_singlet[common_barcode,]
-  pred_singlet <- pred_singlet[common_barcode,]
-  truth_types = unlist(list(truth_singlet[,'first_type']))
-  pred_types = unlist(list(pred_singlet[,'first_type']))
-  return(table(truth_types, pred_types))
-}
 mytable <- singlet_table(truth_results, pred_results)
 mytable
 ```
@@ -72,8 +64,7 @@ cluster_assignments <- rownames(mytable)[apply(mytable, 2, function(x) which(x =
 names(cluster_assignments) <- colnames(mytable)
 
 # replace cluster with assigned cell type
-ground_truth <- truth_results[truth_results$spot_class %in% c('singlet', 'doublet_certain', 'doublet_uncertain'),
-                              c('spot_class', 'first_type', 'second_type')]
+ground_truth <- truth_results[truth_results$spot_class %in% c('singlet', 'doublet_certain', 'doublet_uncertain'), c('spot_class', 'first_type', 'second_type')]
 predicted <- pred_results[rownames(ground_truth),c('spot_class', 'first_type', 'second_type')]
 predicted$first_type <- sapply(predicted$first_type, function(x) cluster_assignments[x])
 predicted$second_type <- sapply(predicted$second_type, function(x) cluster_assignments[x])
@@ -147,15 +138,33 @@ p
 
 ## Marker genes
 
-We can analyze the predicted gene expression profiles by analyzing the expression of known marker genes. We will analyze the expression of known Purkinje marker genes across the predicted cell types.
+We can analyze the predicted gene expression profiles by analyzing the expression of known marker genes. We will analyze the expression of known Bergmann marker genes across the predicted cell types.
 
-```{r marker}
+```{r marker, fig.width=12}
 marker_data_truth <- readRDS(file.path(datadir, 'Data/marker_data_de_standard.RDS'))
 cell_type_info <- RCTD_pred@cell_type_info$info[[1]]
 colnames(cell_type_info) <- cluster_assignments
-markers <- rownames(marker_data_truth[marker_data_truth$cell_type == 'Purkinje',])
-normalized_info <- apply(cell_type_info[intersect(rownames(cell_type_info), markers), ], MARGIN = 1, FUN = function(x) x/max(x))
+markers <- rownames(marker_data_truth[marker_data_truth$cell_type == 'Bergmann',])
+normalized_info <- apply(cell_type_info[intersect(rownames(cell_type_info), markers), c('Bergmann','Granule','MLI','Oligodendrocytes','Purkinje')], MARGIN = 1, FUN = function(x) log(x) - mean(log(x)))
 
-heatmap(normalized_info, Colv = NA, Rowv = NA, scale="column")
+data <- melt(normalized_info)
+ggplot(data, aes(factor(Var2), factor(Var1), fill= value)) +
+    geom_tile() +
+    theme_classic() +
+    scale_fill_gradientn(colors = pals::brewer.rdbu(20)[1:20], limits=c(-10,10)) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    xlab('Marker Genes')+ ylab('Cell Types') + labs(fill='Normalized expression')
+```
+
+```{r, fig.width=12}
+normalized_info <- apply(cell_type_info[intersect(rownames(cell_type_info), markers), c('Bergmann','Granule','MLI','Oligodendrocytes','Purkinje')], MARGIN = 1, FUN = function(x) x / max(x))
+
+data <- melt(normalized_info)
+ggplot(data, aes(factor(Var2), factor(Var1), fill= value)) +
+    geom_tile() +
+    theme_classic() +
+    scale_fill_gradientn(colors = pals::brewer.purples(20)[1:20], limits=c(0,1)) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    xlab('Marker Genes')+ ylab('Cell Types') + labs(fill='Fraction of maximum expression')
 ```
 

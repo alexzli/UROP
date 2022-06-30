@@ -1,13 +1,13 @@
 ---
 title: "Unsupervised Learning on Simulated Spatial Data"
 author: "Alex Li"
-date: "May 10th, 2022"
+date: "June 14th, 2022"
 output: html_document
 ---
 
 ```{r setup}
 datadir <- '~/UROP'
-source(file.path(datadir, 'R/algorithm.R'))
+source(file.path(datadir, 'R/unsupervised.R'))
 source(file.path(datadir, 'R/analysis.R'))
 ```
 
@@ -92,8 +92,8 @@ cell_types <- c('Astrocytes', 'Bergmann', 'Fibroblast', 'Golgi', 'Granule', 'MLI
 beads_list <- generate_sim_puck(cell_types, rownames(reference@counts), reference, trials=30)
 beads <- beads_list$beads; results <- beads_list$results
 puck <- SpatialRNA(NULL, beads, use_fake_coords = T)
-saveRDS(puck, file.path(datadir, '/objects/sim_puck.rds'))
-saveRDS(results, file.path(datadir, '/objects/sim_puck_truth.rds'))
+saveRDS(puck, file.path(datadir, '/objects/vignette_v1/sim_puck.rds'))
+saveRDS(results, file.path(datadir, '/objects/vignette_v1/sim_puck_truth.rds'))
 ```
 
 ## Running unsupervised learning
@@ -101,9 +101,11 @@ saveRDS(results, file.path(datadir, '/objects/sim_puck_truth.rds'))
 Now we run unsupervised learning on the simulated puck.
 
 ```{r unsupervised, eval=F}
-puck <- readRDS(file.path(datadir, 'objects/sim_puck.rds'))
-RCTD_list <- run.unsupervised(puck, resolution = 0.12, convergence_thresh = 0.999)
-saveRDS(RCTD_list, file.path(datadir, 'objects/final/sim_puck_final.rds'))
+puck <- readRDS(file.path(datadir, 'objects/vignette_v1/sim_puck.rds'))
+cell_type_info <- initialize.clusters(puck, resolution = 0.135)
+myRCTD <- create.object(puck, cell_type_info)
+myRCTD <- run.algorithm(myRCTD, MIN_CHANGE = 1e-3)
+saveRDS(myRCTD, file.path(datadir, 'objects/vignette_v1/sim_puck_new.rds'))
 ```
 
 ## Analyzing singlets
@@ -111,11 +113,11 @@ saveRDS(RCTD_list, file.path(datadir, 'objects/final/sim_puck_final.rds'))
 We load the data and look at the final iteration as our predicted results. We can begin by analyzing its singlet assignment accuracy.
 
 ```{r singlets}
-results <- readRDS(file.path(datadir, 'objects/sim_puck_truth.rds'))
+results <- readRDS(file.path(datadir, 'objects/vignette_v1/sim_puck_truth.rds'))
 colnames(results) <- c('type1','type2','UMI1','UMI2')
-RCTD_list <- readRDS(file.path(datadir, 'objects/final/sim_puck_final.rds'))
-RCTDpred <- RCTD_list[[length(RCTD_list)]]
-pred_results <- RCTDpred@results$results_df
+RCTD_list <- readRDS(file.path(datadir, 'objects/vignette_v1/sim_puck_new.rds'))
+RCTD_pred <- RCTD_list[[length(RCTD_list)]]
+pred_results <- RCTD_pred@results$results_df
 
 # analyze singlets
 truth_types = c()
@@ -123,10 +125,10 @@ pred_types = c()
 for (i in 1:dim(results)[1]) {
   if (pred_results[i,'spot_class'] == 'singlet' & strtoi(results[i,'UMI1']) > strtoi(results[i,'UMI2'])) {
     truth_types <- append(truth_types, results[i,'type1'])
-    pred_types <- append(pred_types, RCTDpred@results$results_df[i, 'first_type'])
+    pred_types <- append(pred_types, RCTD_pred@results$results_df[i, 'first_type'])
   } else if (pred_results[i,'spot_class'] == 'singlet' & strtoi(results[i,'UMI2']) > strtoi(results[i,'UMI1'])) {
     truth_types <- append(truth_types, results[i,'type2'])
-    pred_types <- append(pred_types, RCTDpred@results$results_df[i, 'first_type'])
+    pred_types <- append(pred_types, RCTD_pred@results$results_df[i, 'first_type'])
   }
 }
 mytable <- table(truth_types, pred_types)
@@ -134,23 +136,23 @@ mytable
 assignment.accuracy.plot(mytable)
 ```
 
-## Analyzing Astrocyte-Oligodendrocyte doublets
+## Analyzing Purkinje-Bergmann doublets
 
-Next, we will analyze doublets. Since Astrocyte and Oligodendrocyte cells co-localize in the cerebellum, we will analyze these doublets.
+Next, we will analyze doublets. Since Purkinje and Bergmann cells co-localize in the cerebellum, we will analyze these doublets.
 
 ```{r doublets}
-doublet_truth <- results[results$type1 == 'Astrocytes' & results$type2 == 'Oligodendrocytes',]
+doublet_truth <- results[results$type1 == 'Bergmann' & results$type2 == 'Purkinje',]
 doublet_pred <- pred_results[rownames(doublet_truth),]
 
 deconvolved_doublets <- doublet_pred[(doublet_pred$spot_class == 'doublet_certain') &
-                 ((doublet_pred$first_type == '0' & doublet_pred$second_type == '7') | (doublet_pred$first_type == '7' & doublet_pred$second_type == '0')),]
+                 ((doublet_pred$first_type == '7' & doublet_pred$second_type == '4') | (doublet_pred$first_type == '4' & doublet_pred$second_type == '7')),]
 first_IDs <- rownames(deconvolved_doublets[deconvolved_doublets$first_type == '7',])
 second_IDs <- rownames(deconvolved_doublets[deconvolved_doublets$second_type == '7',])
 
 first_truth <- strtoi(doublet_truth[first_IDs, 'UMI1']) / 1000
 second_truth <- strtoi(doublet_truth[second_IDs, 'UMI1']) / 1000
-first_pred <- RCTDpred@results$weights_doublet[first_IDs, 'first_type']
-second_pred <- RCTDpred@results$weights_doublet[second_IDs, 'second_type']
+first_pred <- RCTD_pred@results$weights_doublet[first_IDs, 'first_type']
+second_pred <- RCTD_pred@results$weights_doublet[second_IDs, 'second_type']
 
 true_prop <- c(first_truth, second_truth)
 pred_prop <- c(first_pred, second_pred)
@@ -162,7 +164,7 @@ We can calculate the mean squared error of spot type proportions for these doubl
 sqrt(sum((true_prop - pred_prop)^2) / length(true_prop))
 ```
 
-We can also plot the predicted Astrocyte proportion as a function of the true Astrocyte proportion.
+We can also plot the predicted Bergmann proportion as a function of the true Bergmann proportion.
 
 ```{r proportion_plot}
 prop_df <- data.frame(factor(true_prop), pred_prop)
@@ -183,7 +185,7 @@ p1 <-ggplot2::ggplot(results_df, ggplot2::aes(x=true, y=means, colour = "true"))
   ggplot2::geom_point() +
   ggplot2::geom_line(ggplot2::aes(y=true,colour = "means")) +
   ggplot2::geom_errorbar(ggplot2::aes(ymin=means-1.96*stdevs, ymax=means+1.96*stdevs), width=.05,
-                         position=ggplot2::position_dodge(0.05)) + theme_classic() + xlab('True Asrtocyte Proportion')+ ylab('Predicted Astrocyte Proportion')+ scale_color_manual(values=c(my_pal[20], my_pal[1]),labels = c("",""), name = "") + scale_y_continuous(breaks = c(0,0.5,1), limits = c(-.03,1.03))+ scale_x_continuous(breaks = c(0,0.5,1), limits = c(-.03,1.03))+ theme(legend.position = "none")
+                         position=ggplot2::position_dodge(0.05)) + theme_classic() + xlab('True Bergmann Proportion')+ ylab('Predicted Bergmann Proportion')+ scale_color_manual(values=c(my_pal[20], my_pal[1]),labels = c("",""), name = "") + scale_y_continuous(breaks = c(0,0.5,1), limits = c(-.03,1.03))+ scale_x_continuous(breaks = c(0,0.5,1), limits = c(-.03,1.03))+ theme(legend.position = "none")
 p1
 ```
 
@@ -210,35 +212,36 @@ p2
 
 ## Analyzing marker genes
 
-We can also analyze how well the unsupervised model predicts gene expression profiles by analyzing marker gene expression. We analyze the expression of known Oligodendrocyte marker genes across all cell types.
+We can also analyze how well the unsupervised model predicts gene expression profiles by analyzing marker gene expression. We analyze the expression of known Bergmann marker genes across all cell types.
 
-```{r marker}
-get_marker_data <- function(cell_type_names, cell_type_means, gene_list) {
-  marker_means = cell_type_means[gene_list,]
-  marker_norm = marker_means / rowSums(marker_means)
-  marker_data = as.data.frame(cell_type_names[max.col(marker_means)])
-  marker_data$max_epr <- apply(cell_type_means[gene_list,],1,max)
-  colnames(marker_data) = c("cell_type",'max_epr')
-  rownames(marker_data) = gene_list
-  marker_data$log_fc <- 0
-  epsilon <- 1e-9
-  for(cell_type in unique(marker_data$cell_type)) {
-    cur_genes <- gene_list[marker_data$cell_type == cell_type]
-    other_mean = rowMeans(cell_type_means[cur_genes,cell_type_names != cell_type])
-    marker_data$log_fc[marker_data$cell_type == cell_type] <- log(epsilon + cell_type_means[cur_genes,cell_type]) - log(epsilon + other_mean)
-  }
-  return(marker_data)
-}
-
+```{r marker, fig.width = 12}
 cluster_assignments <- rownames(mytable)[apply(mytable, 2, function(x) which(x == max(x)))]
 names(cluster_assignments) <- colnames(mytable)
 
 marker_data_truth <- readRDS(file.path(datadir, 'Data/marker_data_de_standard.RDS'))
-cell_type_info <- RCTDpred@cell_type_info$info[[1]]
+cell_type_info <- RCTD_pred@cell_type_info$info[[1]]
 colnames(cell_type_info) <- cluster_assignments
-markers <- rownames(marker_data_truth[marker_data_truth$cell_type == 'Oligodendrocytes',])
-normalized_info <- apply(cell_type_info[intersect(rownames(cell_type_info), markers), ], MARGIN = 1, FUN = function(x) x/max(x))
+markers <- rownames(marker_data_truth[marker_data_truth$cell_type == 'Bergmann',])
+normalized_info <- apply(cell_type_info[intersect(rownames(cell_type_info), markers), c('Bergmann','Granule','MLI2','Oligodendrocytes','Purkinje')], MARGIN = 1, FUN = function(x) log(x) - mean(log(x)))
 
-heatmap(normalized_info, Colv = NA, Rowv = NA, scale="column")
+data <- melt(normalized_info)
+ggplot(data, aes(factor(Var2), factor(Var1), fill= value)) +
+    geom_tile() +
+    theme_classic() +
+    scale_fill_gradientn(colors = pals::brewer.rdbu(20)[1:20], limits=c(-15, 15)) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    xlab('Marker Genes')+ ylab('Cell Types') + labs(fill='Normalized expression')
+```
+
+```{r marker2, fig.width = 12}
+normalized_info <- apply(cell_type_info[intersect(rownames(cell_type_info), markers), c('Bergmann','Granule','MLI2','Oligodendrocytes','Purkinje')], MARGIN = 1, FUN = function(x) x / max(x))
+
+data <- melt(normalized_info)
+ggplot(data, aes(factor(Var2), factor(Var1), fill= value)) +
+    geom_tile() +
+    theme_classic() +
+    scale_fill_gradientn(colors = pals::brewer.purples(20)[1:20], limits=c(0,1)) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    xlab('Marker Genes')+ ylab('Cell Types') + labs(fill='Fraction of maximum expression')
 ```
 
