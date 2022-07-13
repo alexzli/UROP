@@ -48,10 +48,17 @@ iter.optim <- function(RCTD,
   RCTD@config$MIN_CHANGE_DE <- 1e-2
 
   message('iter.optim: assigning initial cell types')
+  if (doublet_mode == 'subtype') {
+    initialSol <- RCTD@results$weights
+  } else {
+    initialSol <- NULL
+  }
   RCTD <- fitPixels(
     RCTD, 
-    doublet_mode = doublet_mode
+    doublet_mode = doublet_mode,
+    initialSol = initialSol
   )
+
   RCTD_list <- list(RCTD)
 
   for (i in 1:n_iter) {
@@ -102,7 +109,9 @@ iter.optim <- function(RCTD,
       results[results$spot_class == 'doublet_certain' & 
       results$singlet_score - results$min_score < DOUBLET_THRESHOLD, ]
     )
-    RCTD@results$results_df[reassign, ]$spot_class <- 'singlet'
+    if (length(reassign) > 0) {
+      RCTD@results$results_df[reassign, ]$spot_class <- 'singlet'
+    }
   }
   RCTD@originalSpatialRNA <- originalSpatialRNA
   RCTD_list[[i + 1]] <- RCTD
@@ -179,7 +188,8 @@ create.object <- function(spatialRNA,
       puck.original,
       fc_thresh = config$fc_cutoff_reg,
       expr_thresh = config$gene_cutoff_reg,
-      MIN_OBS = config$MIN_OBS
+      MIN_OBS = config$MIN_OBS,
+      max_genes = 500
     )
   }
   if(length(gene_list_reg) == 0) {
@@ -258,9 +268,7 @@ initialize.subtypes <- function(RCTD,
                                 cell_types, 
                                 resolution = 0.7,
                                 SCT = T,
-                                gene_list = NULL,
-                                fc_thresh = 0.5,
-                                expr_thresh = 1e-4) {
+                                gene_list_tot = NULL) {
   message('initialize.subtypes: gathering results')
   if (RCTD@config$RCTDmode == 'doublet') {
     weights <- weights_from_results(RCTD@results)
@@ -288,32 +296,30 @@ initialize.subtypes <- function(RCTD,
   )
   colnames(subtype_info[[1]]) <- subtype_info[[2]]
   RCTD@spatialRNA <- RCTD@originalSpatialRNA
-  if (is.null(gene_list)) {
+  if (is.null(gene_list_tot)) {
     message('initialize.subtypes: getting subtype regression differentially expressed genes: ')
     subtype_genes <- get_de_genes(
       subtype_info, 
       singlet_puck, 
-      fc_thresh = fc_thresh, 
-      expr_thresh = expr_thresh, 
-      MIN_OBS = 3
+      fc_thresh = 0.5, 
+      expr_thresh = 1e-4, 
+      MIN_OBS = 3,
+      max_genes = 500
     )
-    message('initialize.subtypes: getting supertype gene expression profiles: ')
-    supertype_info <- cell_type_info_from_de(RCTD)
     message('initialize.subtypes: getting supertype highly expressed genes: ')
     supertype_genes <- get_de_genes(
-      supertype_info, 
+      RCTD@cell_type_info$renorm, 
       RCTD@originalSpatialRNA, 
       cell_types = cell_types,
       fc_thresh = 0, 
-      expr_thresh = 1e-4, 
-      MIN_OBS = 3
+      expr_thresh = 2e-4, 
+      MIN_OBS = 3,
+      max_genes = 500
     )
     gene_list_tot <- union(subtype_genes, supertype_genes)
-  } else {
-    message('initialize.subtypes: getting supertype gene expression profiles: ')
-    supertype_info <- cell_type_info_from_de(RCTD, gene_list = gene_list)
-    gene_list_tot <- gene_list
   }
+  message('initialize.subtypes: getting supertype gene expression profiles: ')
+  supertype_info <- cell_type_info_from_de(RCTD, gene_list = gene_list_tot)
   info <- cbind(
     supertype_info[[1]][gene_list_tot, ], 
     subtype_info[[1]][gene_list_tot, ]
@@ -329,8 +335,20 @@ initialize.subtypes <- function(RCTD,
     cell_types_present, 
     function(x) c(x, subtype_info[[2]])
   )
+
+  barcodes <- colnames(RCTD@spatialRNA@counts)
+  weights <- weights[, setdiff(colnames(weights), cell_types)]
+  subtype_weights <- replicate(
+    subtype_info[[3]], 
+    (1 - rowSums(weights)) / subtype_info[[3]]
+  )
+  colnames(subtype_weights) <- subtype_info[[2]]
+  weights <- cbind(weights, subtype_weights)
+  weights <- weights[barcodes, cell_type_info[[2]]]
+
   RCTD@internal_vars$subtypes = subtype_info[[2]]
-  RCTD@internal_vars$cell_types_present = cell_types_present
+  RCTD@internal_vars$cell_types_present = cell_types_present[barcodes]
+  RCTD@results$weights <- weights
   RCTD
 }
 
@@ -339,8 +357,7 @@ weights_from_results <- function(results) {
   df <- results$results_df
   wd <- results$weights_doublet
   singlets <- rownames(df[df$spot_class == 'singlet', ])
-  doublets <- rownames(df[df$spot_class == 'doublet_certain' |
-                          df$spot_class == 'doublet_uncertain', ])
+  doublets <- rownames(df[df$spot_class == 'doublet_certain', ])
   barcodes <- c(singlets, doublets)
   cell_types <- levels(df$first_type)
   weights <- matrix(0, nrow = length(barcodes), ncol = length(cell_types))
