@@ -1,0 +1,153 @@
+---
+title: "Unsupervised learning in the Hippocampus"
+author: "Alex Li"
+date: 'July 1st, 2022'
+output: html_document
+---
+
+```{r setup}
+datadir <- '~/UROP'
+source(file.path(datadir, 'R/analysis.R'))
+source(file.path(datadir, 'R/unsupervised.R'))
+```
+
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = T, warning = F, message = F)
+```
+
+## Introduction
+
+We demonstrate our subtype mode on a Slide-seq hippocampus dataset. Interneurons have distinct subtypes that can be detected by the unsupervised algorithm.
+
+## Running unsupervised learning
+
+```{r unsupervised, eval=F}
+puck <- readRDS(file.path(datadir, '/Data/puckCropped_hippocampus.rds'))
+cell_type_info <- initialize.clusters(puck, resolution = 0.5)
+myRCTD <- create.object(puck, cell_type_info)
+myRCTD <- run.algorithm(myRCTD)
+saveRDS(myRCTD, file.path(datadir, 'Objects/vignette_v1/hippocampus_final.rds'))
+```
+
+## Spatially plotting cell types
+
+We can spatially plot the predicted cell types to get an idea of the algorithm's performance.
+
+```{r plot}
+RCTD_list <- readRDS(file.path(datadir, 'Objects/vignette_v1/hippocampus_final.rds'))
+RCTD_pred <- RCTD_list[[length(RCTD_list)]]
+plot_all_cell_types(RCTD_pred@results$results_df, RCTD_pred@originalSpatialRNA@coords, RCTD_pred@cell_type_info$renorm[[2]], '..')
+```
+
+## Comparison with RCTD
+
+We can run RCTD to compare the results against a supervised prediction.
+
+```{r supervised, eval=F}
+puck <- readRDS(file.path(datadir, '/Data/puckCropped_hippocampus.rds'))
+cti <- readRDS(file.path(datadir, '/Data/info_renorm_coarse.RDS'))
+myRCTD <- create.object(puck, cell_type_info = cti)
+myRCTD <- run.RCTD(myRCTD)
+saveRDS(myRCTD, file.path(datadir, '/Data/RCTD_hippocampus_coarse.rds'))
+```
+
+We start by comparing singlets.
+
+```{r singlets2}
+RCTD_truth <- readRDS(file.path(datadir, 'data/RCTD_hippocampus_coarse.rds'))
+pred_results <- RCTD_pred@results$results_df
+truth_results <- RCTD_truth@results$results_df
+
+mytable <- singlet_table(truth_results, pred_results)
+mytable
+```
+
+## Interneuron subtypes
+
+We see that cluster 5 corresponds with the interneurons, so we run the algorithm on subtype mode on this cluster with three subtypes.
+
+```{r subtype, eval=F}
+RCTD_list <- readRDS(file.path(datadir, 'Objects/vignette_v1/hippocampus_final.rds'))
+RCTD_pred <- RCTD_list[[length(RCTD_list)]]
+
+interneuronRCTD <- initialize.subtypes(RCTD_pred, '5', resolution = 0.8)
+saveRDS(interneuronRCTD, file.path(datadir, 'Objects/vignette_v1/interneuronRCTD_init_moregenes.rds'))
+#interneuronRCTD <- readRDS(file.path(datadir, 'Objects/vignette_v1/interneuronRCTD_init_moregenes.rds'))
+interneuronRCTD <- run.subtypes(interneuronRCTD, n_iter = 150)
+saveRDS(interneuronRCTD, file.path(datadir, 'Objects/vignette_v1/interneuronRCTD_moregenes_randominit.rds'))
+```
+
+Now we plot the subtypes.
+
+```{r subtype_plot, fig.height = 20, fig.width = 8}
+RCTD_list <- readRDS(file.path(datadir, 'Objects/vignette_v1/interneuronRCTD.rds'))
+RCTD_pred <- RCTD_list[[length(RCTD_list)]]
+
+predicted_plot <- function(x) {
+  plot_puck_continuous(RCTD_pred@originalSpatialRNA, colnames(RCTD_pred@originalSpatialRNA@counts), RCTD_pred@results$weights[, x], size = 0.2, my_pal = pals::coolwarm(20), title = x)
+} 
+
+plots = list()
+plots[[1]] <- predicted_plot('subtype_0')
+plots[[2]] <- predicted_plot('subtype_1')
+plots[[3]] <- predicted_plot('subtype_2')
+
+ggarrange(plotlist = plots, ncol = 1)
+```
+
+## Marker genes
+
+```{r}
+get_marker_data <- function(cell_type_names, cell_type_means, gene_list) {
+  marker_means = cell_type_means[gene_list,]
+  marker_norm = marker_means / rowSums(marker_means)
+  marker_data = as.data.frame(cell_type_names[max.col(marker_means)])
+  marker_data$max_epr <- apply(cell_type_means[gene_list,],1,max)
+  colnames(marker_data) = c("cell_type",'max_epr')
+  rownames(marker_data) = gene_list
+  marker_data$log_fc <- 0
+  epsilon <- 1e-9
+  for(cell_type in unique(marker_data$cell_type)) {
+    cur_genes <- gene_list[marker_data$cell_type == cell_type]
+    other_mean = rowMeans(cell_type_means[cur_genes,cell_type_names != cell_type])
+    marker_data$log_fc[marker_data$cell_type == cell_type] <- log(epsilon + cell_type_means[cur_genes,cell_type]) - log(epsilon + other_mean)
+  }
+  return(marker_data)
+}
+cur_cell_types <- c('Basket_OLM', 'CGE', 'Neurogliaform_Lacunosum')
+puck <- readRDS(file.path(datadir, '/Data/puckCropped_hippocampus.rds'))
+cell_type_info_restr = readRDS(file.path(datadir, '/Data/info_renorm_coarse.RDS'))
+cell_type_info_restr[[1]] = cell_type_info_restr[[1]][,cur_cell_types]
+cell_type_info_restr[[2]] = cur_cell_types; cell_type_info_restr[[3]] = length(cur_cell_types)
+de_genes <- get_de_genes(cell_type_info_restr, puck, fc_thresh = 2.5, expr_thresh = .0001, MIN_OBS = 3)
+marker_data_de = get_marker_data(cell_type_info_restr[[2]], cell_type_info_restr[[1]], de_genes)
+
+data_de = marker_data_de[marker_data_de$cell_type == 'CGE', ]
+marker_data_de[marker_data_de$cell_type == 'CGE', ] <- data_de[order(data_de$log_fc, decreasing = T),]
+data_de = marker_data_de[marker_data_de$cell_type == 'Neurogliaform_Lacunosum', ]
+marker_data_de[marker_data_de$cell_type == 'Neurogliaform_Lacunosum', ] <- data_de[order(data_de$log_fc, decreasing = T),]
+data_de = marker_data_de[marker_data_de$cell_type == 'Basket_OLM', ]
+marker_data_de[marker_data_de$cell_type == 'Basket_OLM', ] <- data_de[order(data_de$log_fc, decreasing = T),]
+
+marker_data_de
+```
+
+```{r}
+RCTD_pred@cell_type_info$renorm[[1]][intersect(rownames(marker_data_de), RCTD_pred@internal_vars$gene_list_reg), c('subtype_0','subtype_1','subtype_2')]
+
+info <- RCTD_pred@cell_type_info$renorm[[1]][rev(intersect(rownames(marker_data_de), RCTD_pred@internal_vars$gene_list_reg)), c('subtype_0','subtype_1','subtype_2')]
+info['Vip', 'subtype_1'] <- 1e-12
+info['Penk', 'subtype_1'] <- 1e-12
+info <- apply(info, 1, function(x) log(x) - mean(log(x)))
+
+data <- melt(data.matrix(info))
+plot <- ggplot(data, aes(factor(Var1), factor(Var2), fill= value)) +
+						   geom_tile() +
+						   theme_classic() +
+						   scale_fill_gradientn(colors = pals::brewer.rdbu(20), limits=c(-15,15), name='Normalized Expression') +
+						   theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+						   xlab('Cell Type')+ ylab('Gene')
+plot
+```
+

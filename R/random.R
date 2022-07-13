@@ -145,3 +145,46 @@ p1 <- ggplot2::ggplot(full_df) +
     scale_color_manual(values=c(my_pal[1], my_pal[20]))+ theme(legend.position="top") + xlab('Bergmann Log Expression') + ylab('Purkinje Log Expression') +
     geom_abline(intercept = 0, slope = 1, color="black", size=0.5, linetype="dashed")
 p1
+
+
+
+# Hippocampus subtypes with doublet mode
+
+## Interneuron subtypes
+
+We see that cluster 5 corresponds with the interneurons, so we run the algorithm on subtype mode on this cluster with three subtypes.
+
+```{r subtype2, eval=F}
+barcodes <- rownames(pred_results[pred_results$spot_class != 'reject' & pred_results$first_type == '5', ])
+interneuron_puck <- restrict_puck(RCTD_pred@originalSpatialRNA, barcodes)
+
+interneuron_info <- initialize.clusters(interneuron_puck, resolution = 0.7)
+interneuronRCTD <- create.object(interneuron_puck, interneuron_info)
+interneuronRCTD <- run.algorithm(interneuronRCTD)
+saveRDS(interneuronRCTD, file.path(datadir, 'Objects/vignette_v1/interneuronRCTD_doublet.rds'))
+```
+
+## Spatially plotting cell types
+
+We can spatially plot the predicted cell types to get an idea of the algorithm's performance.
+
+```{r plot2}
+RCTD_list <- readRDS(file.path(datadir, 'Objects/vignette_v1/interneuronRCTD_doublet.rds'))
+RCTD_pred <- RCTD_list[[length(RCTD_list)]]
+plot_all_cell_types(RCTD_pred@results$results_df, RCTD_pred@originalSpatialRNA@coords, RCTD_pred@cell_type_info$renorm[[2]], '..')
+```
+
+## Compare with RCTD
+
+We start by comparing singlets.
+
+```{r singlets}
+RCTD_truth <- readRDS(file.path(datadir, 'data/RCTD_hippocampus_coarse.rds'))
+pred_results <- RCTD_pred@results$results_df
+truth_results <- RCTD_truth@results$results_df
+
+mytable <- singlet_table(truth_results, pred_results)
+mytable
+```
+
+

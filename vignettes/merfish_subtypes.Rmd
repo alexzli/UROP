@@ -30,7 +30,7 @@ Using our unsupervised model, we were able to find the excitatory neurons as cel
 RCTD_list <- readRDS(file.path(datadir, 'Objects/vignette_v1/MERFISH_20um2_final.rds'))
 RCTD_pred <- RCTD_list[[length(RCTD_list)]]
 gene_list <- RCTD_pred@internal_vars$gene_list_reg
-excitatory_RCTD <- initialize.subtypes(RCTD_pred, c('0', '5', '7'), resolution = 1.5, gene_list = gene_list)
+excitatory_RCTD <- initialize.subtypes(RCTD_pred, c('0', '5', '7'), resolution = 1.5, gene_list_tot = gene_list)
 excitatory_RCTD <- run.subtypes(excitatory_RCTD)
 saveRDS(excitatory_RCTD, file.path(datadir, 'Objects/vignette_v1/MERFISH_excitatory.rds'))
 ```
@@ -109,7 +109,7 @@ We run the model on predicted cell type 8 from our unsupervised model, which bes
 RCTD_list <- readRDS(file.path(datadir, 'Objects/vignette_v1/MERFISH_20um2_final.rds'))
 RCTD_pred <- RCTD_list[[length(RCTD_list)]]
 gene_list <- RCTD_pred@internal_vars$gene_list_reg
-inhibitory_RCTD <- initialize.subtypes(RCTD_pred, '8', resolution = 1, gene_list = gene_list)
+inhibitory_RCTD <- initialize.subtypes(RCTD_pred, '8', resolution = 1, gene_list_tot = gene_list)
 inhibitory_RCTD <- run.subtypes(inhibitory_RCTD)
 saveRDS(inhibitory_RCTD, file.path(datadir, 'Objects/vignette_v1/MERFISH_inhibitory.rds'))
 ```

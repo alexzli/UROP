@@ -1,5 +1,5 @@
 ---
-title: "Unsupervised learning of Slide-seq data"
+title: "Unsupervised learning in the Cerebellum"
 author: "Alex Li"
 date: "June 14th, 2022"
 output: html_document
